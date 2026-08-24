@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="mars_midnight">#070A12</color>
+    <color name="mars_surface">#111827</color>
+    <color name="mars_red">#FF5A4F</color>
+    <color name="mars_violet">#7C5CFF</color>
+    <color name="mars_white">#F8FAFC</color>
+</resources>

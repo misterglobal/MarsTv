@@ -1,0 +1,3 @@
+-keepattributes *Annotation*,Signature
+-keep class tv.mars.app.core.** { *; }
+-dontwarn org.conscrypt.**

@@ -1,0 +1,35 @@
+# Android Studio / IntelliJ
+*.iml
+.idea/
+.vscode/
+.kotlin/
+.qodo/
+.gradle/
+.gradle-bootstrap/
+
+# Local configuration and secrets
+local.properties
+providers.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# Generated build output
+**/build/
+**/captures/
+**/.externalNativeBuild/
+**/.cxx/
+**/generated/
+**/out/
+**/tmp/
+
+# APK/AAB artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Gradle wrapper local state
+gradle-app-home/
+

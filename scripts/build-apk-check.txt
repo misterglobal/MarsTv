@@ -1,0 +1,65 @@
+$ErrorActionPreference = "Stop"
+
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$GradleVersion = "8.13"
+$GradleSha256 = "20f1b1176237254a6fc204d8434196fa11a4cfb387567519c61556e8710aed78"
+$BootstrapRoot = Join-Path $ProjectRoot ".gradle-bootstrap"
+$GradleZip = Join-Path $BootstrapRoot "gradle-$GradleVersion-bin.zip"
+$GradleHome = Join-Path $BootstrapRoot "gradle-$GradleVersion"
+
+if (-not $env:JAVA_HOME) {
+    $BundledJdk = Join-Path $env:ProgramFiles "Android\Android Studio\jbr"
+    if (Test-Path (Join-Path $BundledJdk "bin\java.exe")) {
+        $env:JAVA_HOME = $BundledJdk
+        $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+    }
+}
+
+if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
+    throw "Java 17 was not found. Install Android Studio and make its JDK available on PATH."
+}
+
+if (-not $env:ANDROID_HOME -and -not $env:ANDROID_SDK_ROOT) {
+    $DefaultSdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+    if (Test-Path $DefaultSdk) {
+        $env:ANDROID_HOME = $DefaultSdk
+        $env:ANDROID_SDK_ROOT = $DefaultSdk
+    } else {
+        Write-Warning "ANDROID_HOME is not set. Android Studio can set up the SDK, or you can define ANDROID_HOME before running this script."
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $BootstrapRoot | Out-Null
+
+if (-not (Test-Path (Join-Path $GradleHome "bin\gradle.bat"))) {
+    if (-not (Test-Path $GradleZip)) {
+        Write-Host "Downloading Gradle $GradleVersion..."
+        Invoke-WebRequest -Uri "https://services.gradle.org/distributions/gradle-$GradleVersion-bin.zip" -OutFile $GradleZip
+    }
+
+    $ActualHash = (Get-FileHash -Algorithm SHA256 $GradleZip).Hash.ToLowerInvariant()
+    if ($ActualHash -ne $GradleSha256) {
+        Remove-Item $GradleZip -Force
+        throw "The Gradle download failed its SHA-256 integrity check."
+    }
+
+    Write-Host "Preparing Gradle..."
+    Expand-Archive -Path $GradleZip -DestinationPath $BootstrapRoot -Force
+}
+
+Push-Location $ProjectRoot
+try {
+    if (-not (Test-Path (Join-Path $ProjectRoot "gradle\wrapper\gradle-wrapper.jar"))) {
+        & (Join-Path $GradleHome "bin\gradle.bat") wrapper --gradle-version $GradleVersion --distribution-type bin
+        if ($LASTEXITCODE -ne 0) { throw "Gradle wrapper setup failed." }
+    }
+
+    & (Join-Path $ProjectRoot "gradlew.bat") assembleDebug
+    if ($LASTEXITCODE -ne 0) { throw "The Android build failed." }
+
+    $Apk = Join-Path $ProjectRoot "app\build\outputs\apk\debug\app-debug.apk"
+    Write-Host ""
+    Write-Host "APK created: $Apk" -ForegroundColor Green
+} finally {
+    Pop-Location
+}

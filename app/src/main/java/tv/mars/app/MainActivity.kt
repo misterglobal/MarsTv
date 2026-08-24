@@ -1,0 +1,25 @@
+package tv.mars.app
+
+import android.content.pm.PackageManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.viewmodel.compose.viewModel
+import tv.mars.app.ui.MarsTvRoot
+import tv.mars.app.ui.MarsTvViewModel
+import tv.mars.app.ui.theme.MarsTvTheme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val isTelevision = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        setContent {
+            MarsTvTheme {
+                val viewModel: MarsTvViewModel = viewModel()
+                MarsTvRoot(viewModel = viewModel, isTelevision = isTelevision)
+            }
+        }
+    }
+}

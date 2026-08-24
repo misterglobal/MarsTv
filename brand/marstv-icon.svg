@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">MarsTV app icon</title>
+  <desc id="desc">A coral planet with an M and an orbital ring on a midnight background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070A12"/>
+      <stop offset="1" stop-color="#17122B"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="132" fill="#FF5A4F"/>
+  <path d="M174 332V184h38l44 62 44-62h38v148h-39v-74l-43 58-43-58v74z" fill="#070A12"/>
+  <path d="M76 239c61-67 194-100 307-78 75 15 103 47 88 77-20 42-106 83-205 99-110 18-204-4-220-45-8-21 4-38 30-53zm25 19c-17 15-17 27-1 37 34 21 105 25 184 12 84-14 152-43 164-68 7-15-19-32-72-43-95-18-215 10-275 62z" fill="#F8FAFC"/>
+</svg>

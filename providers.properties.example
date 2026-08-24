@@ -1,0 +1,3 @@
+# Copy this file to providers.properties to enable the username/password-only login option.
+# Do not commit the real provider URL to a public repository.
+MARSTV_PRIVATE_PORTAL_URL=https://provider.example.com
