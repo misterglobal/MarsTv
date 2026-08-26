@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import tv.mars.app.ui.MarsTvRoot
 import tv.mars.app.ui.MarsTvViewModel
@@ -17,8 +18,19 @@ class MainActivity : ComponentActivity() {
         val isTelevision = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
         setContent {
             MarsTvTheme {
-                val viewModel: MarsTvViewModel = viewModel()
+                val viewModel: MarsTvViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                 MarsTvRoot(viewModel = viewModel, isTelevision = isTelevision)
+            }
+        }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_UI_HIDDEN) {
+            try {
+                ViewModelProvider(this).get(MarsTvViewModel::class.java).clearHiddenCaches()
+            } catch (_: Exception) {
+                // Ignore
             }
         }
     }

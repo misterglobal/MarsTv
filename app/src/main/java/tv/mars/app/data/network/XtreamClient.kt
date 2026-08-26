@@ -1,13 +1,14 @@
 package tv.mars.app.data.network
 
 import android.net.Uri
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.DecodeSequenceMode
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromStream
+import kotlinx.serialization.json.decodeToSequence
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -27,26 +28,19 @@ class XtreamClient(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    suspend fun loadCatalog(account: IptvAccount): CatalogBundle = coroutineScope {
+    suspend fun loadCatalog(account: IptvAccount): CatalogBundle {
         validate(account)
 
-        val liveCategoriesJson = array(account, "get_live_categories")
-        val movieCategoriesJson = array(account, "get_vod_categories")
-        val seriesCategoriesJson = array(account, "get_series_categories")
-        val liveStreamsJson = array(account, "get_live_streams")
-        val moviesJson = array(account, "get_vod_streams")
-        val seriesJson = array(account, "get_series")
-
-        val liveCategories = categories(account, liveCategoriesJson, ContentKind.LIVE)
-        val movieCategories = categories(account, movieCategoriesJson, ContentKind.MOVIE)
-        val seriesCategories = categories(account, seriesCategoriesJson, ContentKind.SERIES)
+        val liveCategories = categories(account, "get_live_categories", ContentKind.LIVE)
+        val movieCategories = categories(account, "get_vod_categories", ContentKind.MOVIE)
+        val seriesCategories = categories(account, "get_series_categories", ContentKind.SERIES)
         val liveNames = liveCategories.associate { it.remoteId to it.name }
         val movieNames = movieCategories.associate { it.remoteId to it.name }
         val seriesNames = seriesCategories.associate { it.remoteId to it.name }
 
-        val channels = channels(account, liveStreamsJson, liveNames)
-        val movies = movies(account, moviesJson, movieNames)
-        val series = series(account, seriesJson, seriesNames)
+        val channels = channels(account, liveNames)
+        val movies = movies(account, movieNames)
+        val series = series(account, seriesNames)
         val programmes = runCatching {
             var epgMap = emptyMap<String, List<tv.mars.app.core.Programme>>()
             network.getStream(endpoint(account, "xmltv.php")) { stream ->
@@ -55,11 +49,11 @@ class XtreamClient(
             epgMap
         }.getOrDefault(emptyMap())
 
-        CatalogBundle(
+        return CatalogBundle(
             accountId = account.id,
-            liveCategories = fillMissingCategories(liveCategories, channels.map { it.categoryKey to it.categoryName }, ContentKind.LIVE),
-            movieCategories = fillMissingCategories(movieCategories, movies.map { it.categoryKey to it.categoryName }, ContentKind.MOVIE),
-            seriesCategories = fillMissingCategories(seriesCategories, series.map { it.categoryKey to it.categoryName }, ContentKind.SERIES),
+            liveCategories = fillMissingCategories(liveCategories, channels.asSequence().map { it.categoryKey to it.categoryName }, ContentKind.LIVE),
+            movieCategories = fillMissingCategories(movieCategories, movies.asSequence().map { it.categoryKey to it.categoryName }, ContentKind.MOVIE),
+            seriesCategories = fillMissingCategories(seriesCategories, series.asSequence().map { it.categoryKey to it.categoryName }, ContentKind.SERIES),
             channels = channels,
             movies = movies,
             series = series,
@@ -103,10 +97,7 @@ class XtreamClient(
         require(authenticated) { userInfo.string("message").ifBlank { "The Xtream username or password was rejected" } }
     }
 
-    private suspend fun array(account: IptvAccount, action: String): JsonArray =
-        getJson(endpoint(account, "player_api.php", mapOf("action" to action))).asArrayOrEmpty()
-
-    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @OptIn(ExperimentalSerializationApi::class)
     private suspend fun getJson(url: String): JsonElement {
         var element: JsonElement = JsonObject(emptyMap<String, JsonElement>())
         network.getStream(url) { stream ->
@@ -115,8 +106,25 @@ class XtreamClient(
         return element
     }
 
-    private fun categories(account: IptvAccount, values: JsonArray, kind: ContentKind): List<Category> = values.mapNotNull { element ->
-        val item = element.jsonObject
+    @OptIn(ExperimentalSerializationApi::class)
+    private suspend fun <T : Any> mapArray(
+        account: IptvAccount,
+        action: String,
+        transform: (JsonObject) -> T?,
+    ): List<T> {
+        val result = mutableListOf<T>()
+        network.getStream(endpoint(account, "player_api.php", mapOf("action" to action))) { stream ->
+            json.decodeToSequence<JsonObject>(stream, DecodeSequenceMode.ARRAY_WRAPPED)
+                .forEach { item -> transform(item)?.let(result::add) }
+        }
+        return result
+    }
+
+    private suspend fun categories(
+        account: IptvAccount,
+        action: String,
+        kind: ContentKind,
+    ): List<Category> = mapArray(account, action) { item ->
         val id = item.string("category_id")
         val name = item.string("category_name")
         if (id.isBlank() || name.isBlank()) null else Category(
@@ -127,14 +135,12 @@ class XtreamClient(
         )
     }
 
-    private fun channels(
+    private suspend fun channels(
         account: IptvAccount,
-        values: JsonArray,
         categoryNames: Map<String, String>,
-    ): List<Channel> = values.mapNotNull { element ->
-        val item = element.jsonObject
+    ): List<Channel> = mapArray(account, "get_live_streams") { item ->
         val id = item.string("stream_id")
-        if (id.isBlank()) return@mapNotNull null
+        if (id.isBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         val extension = item.string("container_extension").ifBlank { "ts" }
         Channel(
@@ -152,14 +158,12 @@ class XtreamClient(
         )
     }
 
-    private fun movies(
+    private suspend fun movies(
         account: IptvAccount,
-        values: JsonArray,
         categoryNames: Map<String, String>,
-    ): List<MediaContent> = values.mapNotNull { element ->
-        val item = element.jsonObject
+    ): List<MediaContent> = mapArray(account, "get_vod_streams") { item ->
         val id = item.string("stream_id")
-        if (id.isBlank()) return@mapNotNull null
+        if (id.isBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         val extension = item.string("container_extension").ifBlank { "mp4" }
         MediaContent(
@@ -177,14 +181,12 @@ class XtreamClient(
         )
     }
 
-    private fun series(
+    private suspend fun series(
         account: IptvAccount,
-        values: JsonArray,
         categoryNames: Map<String, String>,
-    ): List<MediaContent> = values.mapNotNull { element ->
-        val item = element.jsonObject
+    ): List<MediaContent> = mapArray(account, "get_series") { item ->
         val id = item.string("series_id")
-        if (id.isBlank()) return@mapNotNull null
+        if (id.isBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         MediaContent(
             key = "${account.id}:series:$id",
@@ -243,7 +245,7 @@ class XtreamClient(
 
     private fun fillMissingCategories(
         existing: List<Category>,
-        used: List<Pair<String, String>>,
+        used: Sequence<Pair<String, String>>,
         kind: ContentKind,
     ): List<Category> {
         val currentKeys = existing.map(Category::key).toSet()

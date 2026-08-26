@@ -13,6 +13,9 @@ import java.util.Locale
 import java.util.zip.GZIPInputStream
 
 class XmlTvParser {
+    private val offsetPattern = Regex("([+-]\\d{4})")
+    private val normalizationPattern = Regex("[^a-z0-9]")
+
     fun parse(bytes: ByteArray, channels: List<Channel>): Map<String, List<Programme>> =
         parse(ByteArrayInputStream(bytes), channels)
 
@@ -28,8 +31,14 @@ class XmlTvParser {
 
         val directIds = channels.map(Channel::epgId).toSet()
         val nameToId = channels.associate { normalize(it.name) to it.epgId }
+        val programmeLimitPerChannel = (MAX_PROGRAMMES_TOTAL / directIds.size.coerceAtLeast(1))
+            .coerceIn(MIN_PROGRAMMES_PER_CHANNEL, MAX_PROGRAMMES_PER_CHANNEL)
         val idRemap = mutableMapOf<String, String>()
         val programmes = mutableMapOf<String, MutableList<Programme>>()
+        val now = System.currentTimeMillis()
+        val earliestProgrammeEnd = now - PAST_WINDOW_MS
+        val latestProgrammeStart = now + FUTURE_WINDOW_MS
+        var programmeCount = 0
 
         var event = parser.eventType
         var channelBlockId = ""
@@ -79,19 +88,23 @@ class XmlTvParser {
                     "programme" -> {
                         val effectiveId = idRemap[programmeChannel]
                             ?: programmeChannel.takeIf { it in directIds }
-                        val now = System.currentTimeMillis()
                         if (
                             effectiveId != null && title.isNotBlank() &&
                             programmeStart > 0 && programmeEnd > programmeStart &&
-                            programmeEnd >= now - 14L * 86_400_000L && programmeStart <= now + 8L * 86_400_000L
+                            programmeEnd >= earliestProgrammeEnd && programmeStart <= latestProgrammeStart &&
+                            programmeCount < MAX_PROGRAMMES_TOTAL
                         ) {
-                            programmes.getOrPut(effectiveId) { mutableListOf() } += Programme(
-                                channelEpgId = effectiveId,
-                                title = title.trim(),
-                                description = description.trim(),
-                                startMs = programmeStart,
-                                endMs = programmeEnd,
-                            )
+                            val channelProgrammes = programmes.getOrPut(effectiveId) { mutableListOf() }
+                            if (channelProgrammes.size < programmeLimitPerChannel) {
+                                channelProgrammes += Programme(
+                                    channelEpgId = effectiveId,
+                                    title = title.trim().take(MAX_TITLE_CHARS),
+                                    description = description.trim().take(MAX_DESCRIPTION_CHARS),
+                                    startMs = programmeStart,
+                                    endMs = programmeEnd,
+                                )
+                                programmeCount++
+                            }
                         }
                     }
                 }
@@ -99,8 +112,8 @@ class XmlTvParser {
             event = parser.next()
         }
 
-        input.close()
-        return programmes.mapValues { (_, values) -> values.sortedBy(Programme::startMs) }
+        programmes.values.forEach { it.sortBy(Programme::startMs) }
+        return programmes
     }
 
     private fun isGzipped(input: java.io.BufferedInputStream): Boolean {
@@ -114,7 +127,7 @@ class XmlTvParser {
     private fun parseTime(raw: String): Long = runCatching {
         val digits = raw.take(14)
         val date = LocalDateTime.parse(digits, DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-        val offsetMatch = Regex("([+-]\\d{4})").find(raw.drop(14))?.groupValues?.get(1)
+        val offsetMatch = offsetPattern.find(raw.drop(14))?.groupValues?.get(1)
         val offset = offsetMatch?.let {
             val sign = if (it.startsWith('-')) -1 else 1
             ZoneOffset.ofHoursMinutes(sign * it.substring(1, 3).toInt(), sign * it.substring(3, 5).toInt())
@@ -123,5 +136,15 @@ class XmlTvParser {
     }.getOrDefault(0L)
 
     private fun normalize(value: String): String = value.lowercase(Locale.US)
-        .replace(Regex("[^a-z0-9]"), "")
+        .replace(normalizationPattern, "")
+
+    private companion object {
+        const val MAX_PROGRAMMES_TOTAL = 100_000
+        const val MIN_PROGRAMMES_PER_CHANNEL = 8
+        const val MAX_PROGRAMMES_PER_CHANNEL = 64
+        const val MAX_TITLE_CHARS = 300
+        const val MAX_DESCRIPTION_CHARS = 1_000
+        const val PAST_WINDOW_MS = 6L * 3_600_000L
+        const val FUTURE_WINDOW_MS = 36L * 3_600_000L
+    }
 }

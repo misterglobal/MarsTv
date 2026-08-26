@@ -123,6 +123,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 m3uUrl = normalizeUrl(m3uUrl),
             )
 
+            releaseCatalogBeforeLoad(account.id)
             runCatching { repository.loadCatalog(account) }
                 .onSuccess { catalog ->
                     catalogCache[account.id] = catalog
@@ -150,6 +151,16 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun loadActiveAccount(force: Boolean = false) {
         val account = _uiState.value.activeAccount ?: return
+
+        // Keep only the active account in memory to prevent OOM on large playlists
+        val otherAccountIds = catalogCache.keys.filter { it != account.id }
+        otherAccountIds.forEach {
+            catalogCache.remove(it)
+            repository.clearCache(it)
+        }
+
+        if (force) releaseCatalogBeforeLoad(account.id)
+
         val cached = catalogCache[account.id]
         if (!force && cached != null) {
             _uiState.update { it.copy(catalog = cached, isLoading = false, errorMessage = null) }
@@ -161,16 +172,18 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             if (!force) {
                 val persisted = catalogPersistence.load(account.id)
                 if (persisted != null) {
-                    catalogCache[account.id] = persisted
-                    _uiState.update { it.copy(catalog = persisted, isLoading = false) }
-                    
-                    // If data is older than 24 hours, refresh in background
                     val dayMs = 24 * 60 * 60 * 1000L
                     if (System.currentTimeMillis() - persisted.loadedAt < dayMs) {
+                        catalogCache[account.id] = persisted
+                        _uiState.update { it.copy(catalog = persisted, isLoading = false) }
                         return@launch
                     }
                 }
             }
+
+            // Do not hold an expired catalog while constructing its replacement.
+            releaseCatalogBeforeLoad(account.id)
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
 
             runCatching { repository.loadCatalog(account) }
                 .onSuccess { catalog ->
@@ -195,6 +208,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun removeAccount(accountId: String) {
         catalogCache.remove(accountId)
+        repository.clearCache(accountId)
         viewModelScope.launch {
             catalogPersistence.clear(accountId)
             stateStore.removeAccount(accountId)
@@ -378,6 +392,26 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     fun clearHistory() {
         val profileId = _uiState.value.activeProfile?.id ?: return
         viewModelScope.launch { stateStore.clearHistory(profileId) }
+    }
+
+    fun clearHiddenCaches() {
+        val activeId = _uiState.value.activeAccount?.id
+        val otherAccountIds = catalogCache.keys.filter { it != activeId }
+        otherAccountIds.forEach {
+            catalogCache.remove(it)
+            repository.clearCache(it)
+        }
+    }
+
+    private fun releaseCatalogBeforeLoad(accountId: String) {
+        catalogCache.remove(accountId)
+        repository.clearCache(accountId)
+        _uiState.update { state ->
+            if (state.catalog.accountId.isBlank()) state else state.copy(
+                catalog = CatalogBundle.empty(accountId),
+                selectedSeries = null,
+            )
+        }
     }
 
     private fun openPlayer(request: PlayerRequest) {

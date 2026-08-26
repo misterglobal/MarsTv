@@ -8,7 +8,16 @@ import tv.mars.app.core.IptvAccount
 import tv.mars.app.core.MediaContent
 import tv.mars.app.core.SeriesDetails
 import java.net.URI
+import java.text.Normalizer
 import java.util.Locale
+
+data class M3uParseStats(
+    val totalEntries: Int,
+    val liveEntries: Int,
+    val movieEntries: Int,
+    val seriesEpisodes: Int,
+    val unclassifiedEntries: Int,
+)
 
 data class M3uDocument(
     val epgUrl: String,
@@ -19,6 +28,7 @@ data class M3uDocument(
     val movies: List<MediaContent>,
     val series: List<MediaContent>,
     val seriesDetails: Map<String, SeriesDetails>,
+    val stats: M3uParseStats,
 )
 
 class M3uParser {
@@ -26,18 +36,26 @@ class M3uParser {
     private val seasonEpisodePattern = Regex(
         pattern = "(?i)(?:S(\\d{1,2})\\s*[. _-]*E(\\d{1,3})|(?:Season|S)\\s*(\\d{1,2})\\s*(?:Episode|Ep|E)\\s*(\\d{1,3}))",
     )
+    private val seriesPathPattern = Regex("(?i)/(?:series|shows?|episodes?)(?:/|$)")
+    private val moviePathPattern = Regex("(?i)/(?:movies?|vod|video-on-demand)(?:/|$)")
+    private val movieExtensionPattern = Regex("(?i)\\.(?:mp4|mkv|avi|mov|m4v|webm|wmv|flv)(?:$|[?#])")
+    private val livePathPattern = Regex("(?i)/(?:live|channels?)(?:/|$)")
+    private val liveExtensionPattern = Regex("(?i)\\.(?:m3u8|ts)(?:$|[?#])")
+    private val whitespacePattern = Regex("\\s+")
+    private val combiningMarkPattern = Regex("\\p{M}+")
+    private val slugSeparatorPattern = Regex("[^a-z0-9]+")
 
     fun parse(account: IptvAccount, text: String): M3uDocument =
         parse(account, text.byteInputStream())
 
     fun parse(account: IptvAccount, inputStream: java.io.InputStream): M3uDocument {
         val reader = inputStream.bufferedReader()
-        var line = reader.readLine()?.trimStart('\uFEFF')
+        val line = reader.readLine()?.trimStart('\uFEFF')
         require(line?.startsWith("#EXTM3U", ignoreCase = true) == true) {
             "The URL did not return a valid M3U playlist"
         }
 
-        val header = attributes(line!!)
+        val header = attributes(line)
         val epgUrl = header["x-tvg-url"].orEmpty()
             .ifBlank { header["url-tvg"].orEmpty() }
             .split(',')
@@ -46,8 +64,12 @@ class M3uParser {
 
         val channels = mutableListOf<Channel>()
         val movies = mutableListOf<MediaContent>()
-        val rawSeriesEpisodes = mutableListOf<RawSeriesEpisode>()
+        val seriesByTitle = linkedMapOf<String, SeriesAccumulator>()
+        val liveCategories = linkedMapOf<String, Category>()
+        val movieCategories = linkedMapOf<String, Category>()
+        val seriesCategories = linkedMapOf<String, Category>()
         var itemIndex = 0
+        var unclassifiedEntries = 0
 
         while (true) {
             val info = reader.readLine() ?: break
@@ -63,10 +85,31 @@ class M3uParser {
             val attrs = attributes(info)
             val fallbackTitle = info.substringAfterLast(',', "Channel $itemIndex").trim()
             val title = attrs["tvg-name"].orEmpty().ifBlank { fallbackTitle }
-            val group = attrs["group-title"].orEmpty().ifBlank { "Uncategorized" }
+            val rawGroup = normalizeGroup(attrs["group-title"].orEmpty())
             val remoteId = stableId(resolvedUrl, itemIndex)
-            val kind = detectKind(resolvedUrl, group, title)
+            val classification = detectKind(resolvedUrl, rawGroup, title)
+            val kind = classification.kind
+            if (classification.recognized.not()) unclassifiedEntries++
+            val group = rawGroup.ifBlank {
+                when (kind) {
+                    ContentKind.MOVIE -> "Uncategorized Movies"
+                    ContentKind.SERIES, ContentKind.EPISODE -> "Uncategorized Series"
+                    ContentKind.LIVE -> "Uncategorized"
+                }
+            }
             val categoryKey = "${kind.name.lowercase(Locale.US)}:${slug(group)}"
+            val category = when (kind) {
+                ContentKind.LIVE -> liveCategories
+                ContentKind.MOVIE -> movieCategories
+                ContentKind.SERIES, ContentKind.EPISODE -> seriesCategories
+            }.getOrPut(categoryKey) {
+                Category(
+                    key = categoryKey,
+                    remoteId = categoryKey.substringAfter(':'),
+                    name = group,
+                    kind = if (kind == ContentKind.EPISODE) ContentKind.SERIES else kind,
+                )
+            }
 
             when (kind) {
                 ContentKind.LIVE -> channels += Channel(
@@ -74,8 +117,8 @@ class M3uParser {
                     remoteId = remoteId,
                     accountId = account.id,
                     name = title,
-                    categoryKey = categoryKey,
-                    categoryName = group,
+                    categoryKey = category.key,
+                    categoryName = category.name,
                     logoUrl = attrs["tvg-logo"].orEmpty(),
                     epgId = attrs["tvg-id"].orEmpty().ifBlank { title },
                     playbackUrl = resolvedUrl,
@@ -90,104 +133,133 @@ class M3uParser {
                     accountId = account.id,
                     title = title,
                     kind = ContentKind.MOVIE,
-                    categoryKey = categoryKey,
-                    categoryName = group,
+                    categoryKey = category.key,
+                    categoryName = category.name,
                     artworkUrl = attrs["tvg-logo"].orEmpty(),
                     playbackUrl = resolvedUrl,
                 )
 
-                ContentKind.SERIES, ContentKind.EPISODE -> rawSeriesEpisodes += RawSeriesEpisode(
+                ContentKind.SERIES, ContentKind.EPISODE -> addSeriesEpisode(
+                    account = account,
+                    seriesByTitle = seriesByTitle,
                     remoteId = remoteId,
                     title = title,
-                    group = group,
-                    categoryKey = categoryKey,
+                    category = category,
                     artworkUrl = attrs["tvg-logo"].orEmpty(),
                     playbackUrl = resolvedUrl,
                 )
             }
         }
 
-        val seriesBuild = buildSeries(account, rawSeriesEpisodes)
+        val seriesDetails = linkedMapOf<String, SeriesDetails>()
+        val series = seriesByTitle.values
+            .sortedBy { it.media.title.lowercase(Locale.US) }
+            .map { accumulator ->
+                accumulator.episodesBySeason.values.forEach { episodes ->
+                    episodes.sortWith(compareBy(Episode::episodeNumber, Episode::title))
+                }
+                seriesDetails[accumulator.media.seriesId] = SeriesDetails(
+                    series = accumulator.media,
+                    episodesBySeason = accumulator.episodesBySeason,
+                )
+                accumulator.media
+            }
         return M3uDocument(
             epgUrl = epgUrl,
-            liveCategories = categories(channels.map { it.categoryKey to it.categoryName }, ContentKind.LIVE),
-            movieCategories = categories(movies.map { it.categoryKey to it.categoryName }, ContentKind.MOVIE),
-            seriesCategories = categories(seriesBuild.first.map { it.categoryKey to it.categoryName }, ContentKind.SERIES),
+            liveCategories = liveCategories.values.sortedBy { it.name.lowercase(Locale.US) },
+            movieCategories = movieCategories.values.sortedBy { it.name.lowercase(Locale.US) },
+            seriesCategories = seriesCategories.values.sortedBy { it.name.lowercase(Locale.US) },
             channels = channels,
             movies = movies,
-            series = seriesBuild.first,
-            seriesDetails = seriesBuild.second,
+            series = series,
+            seriesDetails = seriesDetails,
+            stats = M3uParseStats(
+                totalEntries = itemIndex,
+                liveEntries = channels.size,
+                movieEntries = movies.size,
+                seriesEpisodes = seriesDetails.values.sumOf { details ->
+                    details.episodesBySeason.values.sumOf { episodes -> episodes.size }
+                },
+                unclassifiedEntries = unclassifiedEntries,
+            ),
         )
     }
 
-    private fun buildSeries(
+    private fun addSeriesEpisode(
         account: IptvAccount,
-        raw: List<RawSeriesEpisode>,
-    ): Pair<List<MediaContent>, Map<String, SeriesDetails>> {
-        val grouped = raw.groupBy { episode ->
-            val match = seasonEpisodePattern.find(episode.title)
-            match?.let { episode.title.removeRange(it.range).trim(' ', '-', '.', '_') }
-                ?.ifBlank { episode.group }
-                ?: episode.group.ifBlank { episode.title }
-        }
-
-        val series = mutableListOf<MediaContent>()
-        val details = mutableMapOf<String, SeriesDetails>()
-        grouped.entries.sortedBy { it.key.lowercase(Locale.US) }.forEach { (seriesTitle, items) ->
-            val seriesId = "m3u-${slug(seriesTitle)}-${items.first().remoteId.takeLast(6)}"
-            val first = items.first()
-            val media = MediaContent(
-                key = "${account.id}:series:$seriesId",
-                remoteId = seriesId,
-                accountId = account.id,
-                title = seriesTitle,
-                kind = ContentKind.SERIES,
-                categoryKey = "series:${slug(first.group)}",
-                categoryName = first.group,
-                artworkUrl = items.firstOrNull { it.artworkUrl.isNotBlank() }?.artworkUrl.orEmpty(),
-                seriesId = seriesId,
-            )
-            val episodes = items.mapIndexed { episodeIndex, item ->
-                val match = seasonEpisodePattern.find(item.title)
-                val season = match?.groupValues?.getOrNull(1)?.toIntOrNull()
-                    ?: match?.groupValues?.getOrNull(3)?.toIntOrNull()
-                    ?: 1
-                val number = match?.groupValues?.getOrNull(2)?.toIntOrNull()
-                    ?: match?.groupValues?.getOrNull(4)?.toIntOrNull()
-                    ?: episodeIndex + 1
-                Episode(
-                    key = "${account.id}:episode:${item.remoteId}",
-                    remoteId = item.remoteId,
+        seriesByTitle: MutableMap<String, SeriesAccumulator>,
+        remoteId: String,
+        title: String,
+        category: Category,
+        artworkUrl: String,
+        playbackUrl: String,
+    ) {
+        val match = seasonEpisodePattern.find(title)
+        val seriesTitle = match?.let { title.removeRange(it.range).trim(' ', '-', '.', '_') }
+            ?.ifBlank { category.name }
+            ?: category.name.ifBlank { title }
+        val accumulator = seriesByTitle.getOrPut(seriesTitle) {
+            val seriesId = "m3u-${slug(seriesTitle)}-${remoteId.takeLast(6)}"
+            SeriesAccumulator(
+                media = MediaContent(
+                    key = "${account.id}:series:$seriesId",
+                    remoteId = seriesId,
                     accountId = account.id,
-                    title = item.title,
-                    seasonNumber = season,
-                    episodeNumber = number,
-                    playbackUrl = item.playbackUrl,
-                    artworkUrl = item.artworkUrl,
-                )
-            }.sortedWith(compareBy(Episode::seasonNumber, Episode::episodeNumber))
-            series += media
-            details[seriesId] = SeriesDetails(media, episodes.groupBy(Episode::seasonNumber))
+                    title = seriesTitle,
+                    kind = ContentKind.SERIES,
+                    categoryKey = category.key,
+                    categoryName = category.name,
+                    artworkUrl = artworkUrl,
+                    seriesId = seriesId,
+                ),
+            )
         }
-        return series to details
+        if (accumulator.media.artworkUrl.isBlank() && artworkUrl.isNotBlank()) {
+            accumulator.media = accumulator.media.copy(artworkUrl = artworkUrl)
+        }
+        val season = match?.groupValues?.getOrNull(1)?.toIntOrNull()
+            ?: match?.groupValues?.getOrNull(3)?.toIntOrNull()
+            ?: 1
+        val episodes = accumulator.episodesBySeason.getOrPut(season) { mutableListOf() }
+        val number = match?.groupValues?.getOrNull(2)?.toIntOrNull()
+            ?: match?.groupValues?.getOrNull(4)?.toIntOrNull()
+            ?: episodes.size + 1
+        episodes += Episode(
+            key = "${account.id}:episode:$remoteId",
+            remoteId = remoteId,
+            accountId = account.id,
+            title = title,
+            seasonNumber = season,
+            episodeNumber = number,
+            playbackUrl = playbackUrl,
+            artworkUrl = artworkUrl,
+        )
     }
-
-    private fun categories(values: List<Pair<String, String>>, kind: ContentKind): List<Category> =
-        values.distinctBy { it.first }.map { (key, name) ->
-            Category(key = key, remoteId = key.substringAfter(':'), name = name, kind = kind)
-        }.sortedBy { it.name.lowercase(Locale.US) }
 
     private fun attributes(line: String): Map<String, String> = attributePattern.findAll(line)
         .associate { it.groupValues[1].lowercase(Locale.US) to it.groupValues[2] }
 
-    private fun detectKind(url: String, group: String, title: String): ContentKind {
-        val searchable = "$url $group $title".lowercase(Locale.US)
+    private fun detectKind(url: String, group: String, title: String): Classification {
+        val normalizedGroup = group.lowercase(Locale.US)
         return when {
-            "/series/" in searchable || Regex("(?i)S\\d{1,2}E\\d{1,3}").containsMatchIn(title) -> ContentKind.SERIES
-            "/movie/" in searchable || "vod" in group.lowercase(Locale.US) || "movie" in group.lowercase(Locale.US) -> ContentKind.MOVIE
-            else -> ContentKind.LIVE
+            seriesPathPattern.containsMatchIn(url) ||
+                seasonEpisodePattern.containsMatchIn(title) ||
+                containsAny(normalizedGroup, "series", "tv show", "episode") -> Classification(ContentKind.SERIES)
+
+            moviePathPattern.containsMatchIn(url) ||
+                movieExtensionPattern.containsMatchIn(url) ||
+                containsAny(normalizedGroup, "vod", "movie", "film", "cinema") -> Classification(ContentKind.MOVIE)
+
+            livePathPattern.containsMatchIn(url) ||
+                liveExtensionPattern.containsMatchIn(url) ||
+                url.startsWith("udp://", ignoreCase = true) ||
+                url.startsWith("rtp://", ignoreCase = true) -> Classification(ContentKind.LIVE)
+
+            else -> Classification(ContentKind.LIVE, recognized = false)
         }
     }
+
+    private fun containsAny(value: String, vararg terms: String): Boolean = terms.any(value::contains)
 
     private fun stableId(url: String, index: Int): String =
         url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').ifBlank { index.toString() }
@@ -196,17 +268,24 @@ class M3uParser {
         URI(base).resolve(candidate).toString()
     }.getOrDefault(candidate)
 
-    private fun slug(value: String): String = value.lowercase(Locale.US)
-        .replace(Regex("[^a-z0-9]+"), "-")
+    private fun normalizeGroup(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
+        .replace(whitespacePattern, " ")
+        .trim()
+
+    private fun slug(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKD)
+        .replace(combiningMarkPattern, "")
+        .lowercase(Locale.US)
+        .replace(slugSeparatorPattern, "-")
         .trim('-')
         .ifBlank { "uncategorized" }
 
-    private data class RawSeriesEpisode(
-        val remoteId: String,
-        val title: String,
-        val group: String,
-        val categoryKey: String,
-        val artworkUrl: String,
-        val playbackUrl: String,
+    private data class Classification(
+        val kind: ContentKind,
+        val recognized: Boolean = true,
+    )
+
+    private data class SeriesAccumulator(
+        var media: MediaContent,
+        val episodesBySeason: MutableMap<Int, MutableList<Episode>> = linkedMapOf(),
     )
 }

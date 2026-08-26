@@ -1,6 +1,7 @@
 package tv.mars.app.data.repository
 
 import android.net.Uri
+import android.util.Log
 import tv.mars.app.core.CatalogBundle
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
@@ -16,12 +17,17 @@ import tv.mars.app.data.network.NetworkClient
 import tv.mars.app.data.network.XmlTvParser
 import tv.mars.app.data.network.XtreamClient
 import java.net.URI
+import java.net.URLDecoder
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
 class IptvRepository {
+    private companion object {
+        const val TAG = "IptvRepository"
+    }
+
     private val network = NetworkClient()
     private val xmlTv = XmlTvParser()
     private val m3u = M3uParser()
@@ -36,9 +42,24 @@ class IptvRepository {
     suspend fun loadSeriesDetails(account: IptvAccount, series: MediaContent): SeriesDetails =
         when (account.sourceType) {
             SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> xtream.loadSeriesDetails(account, series)
-            SourceType.M3U -> m3uSeriesCache[account.id]?.get(series.seriesId)
-                ?: SeriesDetails(series, emptyMap())
+            SourceType.M3U -> {
+                val xtreamAccount = account.xtreamAccountFromM3u()
+                if (xtreamAccount != null && series.seriesId.startsWith("m3u-").not()) {
+                    xtream.loadSeriesDetails(xtreamAccount, series)
+                } else {
+                    m3uSeriesCache[account.id]?.get(series.seriesId)
+                        ?: SeriesDetails(series, emptyMap())
+                }
+            }
         }
+
+    fun clearCache(accountId: String) {
+        m3uSeriesCache.remove(accountId)
+    }
+
+    fun clearAllCaches() {
+        m3uSeriesCache.clear()
+    }
 
     fun liveRequest(channel: Channel): PlayerRequest = PlayerRequest(
         contentKey = channel.key,
@@ -87,11 +108,33 @@ class IptvRepository {
     }
 
     private suspend fun loadM3u(account: IptvAccount): CatalogBundle {
+        // A refresh must not retain the previous episode graph while a new one is built.
+        m3uSeriesCache.remove(account.id)
+        account.xtreamAccountFromM3u()?.let { xtreamAccount ->
+            val xtreamResult = runCatching { xtream.loadCatalog(xtreamAccount) }
+            if (xtreamResult.isSuccess) {
+                val catalog = xtreamResult.getOrThrow()
+                Log.i(
+                    TAG,
+                    "Xtream catalog: Live: ${catalog.channels.size}; " +
+                        "Movies: ${catalog.movies.size}; Series: ${catalog.series.size}",
+                )
+                return catalog
+            }
+            Log.w(TAG, "Xtream discovery failed; using M3U classification fallback")
+        }
+
         var parsed: M3uDocument? = null
         network.getStream(account.m3uUrl) { stream ->
             parsed = m3u.parse(account, stream)
         }
         val doc = parsed ?: error("Failed to parse M3U playlist")
+        Log.i(
+            TAG,
+            "Playlist entries: ${doc.stats.totalEntries}; Live: ${doc.stats.liveEntries}; " +
+                "Movies: ${doc.stats.movieEntries}; Series episodes: ${doc.stats.seriesEpisodes}; " +
+                "Unclassified: ${doc.stats.unclassifiedEntries}",
+        )
         m3uSeriesCache[account.id] = doc.seriesDetails
         val programmes = if (doc.epgUrl.isNotBlank()) {
             runCatching {
@@ -121,3 +164,36 @@ class IptvRepository {
         URI(base).resolve(candidate).toString()
     }.getOrDefault(candidate)
 }
+
+internal fun IptvAccount.xtreamAccountFromM3u(): IptvAccount? {
+    if (sourceType != SourceType.M3U) return null
+    val uri = runCatching { URI(m3uUrl) }.getOrNull() ?: return null
+    val supportedScheme = uri.scheme.equals("http", true) || uri.scheme.equals("https", true)
+    if (supportedScheme.not() || uri.rawAuthority.isNullOrBlank()) return null
+    if (uri.rawPath.substringAfterLast('/').equals("get.php", true).not()) return null
+
+    val parameters = runCatching {
+        uri.rawQuery.orEmpty()
+            .split('&')
+            .mapNotNull { part ->
+                if (part.isBlank()) return@mapNotNull null
+                val key = part.substringBefore('=').urlDecode().lowercase()
+                val value = part.substringAfter('=', "").urlDecode()
+                key to value
+            }
+            .toMap()
+    }.getOrNull() ?: return null
+    val extractedUsername = parameters["username"].orEmpty()
+    val extractedPassword = parameters["password"].orEmpty()
+    if (extractedUsername.isBlank() || extractedPassword.isBlank()) return null
+
+    val directory = uri.rawPath.substringBeforeLast('/', "").trimEnd('/')
+    return copy(
+        sourceType = SourceType.XTREAM,
+        serverUrl = "${uri.scheme}://${uri.rawAuthority}$directory",
+        username = extractedUsername,
+        password = extractedPassword,
+    )
+}
+
+private fun String.urlDecode(): String = URLDecoder.decode(this, Charsets.UTF_8.name())
