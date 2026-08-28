@@ -15,6 +15,12 @@ import java.util.zip.GZIPInputStream
 class XmlTvParser {
     private val offsetPattern = Regex("([+-]\\d{4})")
     private val normalizationPattern = Regex("[^a-z0-9]")
+    private val stringPool = mutableMapOf<String, String>()
+
+    private fun intern(s: String?): String? {
+        if (s == null) return null
+        return stringPool.getOrPut(s) { s }
+    }
 
     fun parse(bytes: ByteArray, channels: List<Channel>): Map<String, List<Programme>> =
         parse(ByteArrayInputStream(bytes), channels)
@@ -86,8 +92,8 @@ class XmlTvParser {
                         if (target != null) idRemap[channelBlockId] = target
                     }
                     "programme" -> {
-                        val effectiveId = idRemap[programmeChannel]
-                            ?: programmeChannel.takeIf { it in directIds }
+                        val effectiveId = intern(idRemap[programmeChannel]
+                            ?: programmeChannel.takeIf { it in directIds })
                         if (
                             effectiveId != null && title.isNotBlank() &&
                             programmeStart > 0 && programmeEnd > programmeStart &&
@@ -98,8 +104,8 @@ class XmlTvParser {
                             if (channelProgrammes.size < programmeLimitPerChannel) {
                                 channelProgrammes += Programme(
                                     channelEpgId = effectiveId,
-                                    title = title.trim().take(MAX_TITLE_CHARS),
-                                    description = description.trim().take(MAX_DESCRIPTION_CHARS),
+                                    title = intern(title.trim().take(MAX_TITLE_CHARS)) ?: "",
+                                    description = intern(description.trim().take(MAX_DESCRIPTION_CHARS)) ?: "",
                                     startMs = programmeStart,
                                     endMs = programmeEnd,
                                 )
@@ -113,6 +119,7 @@ class XmlTvParser {
         }
 
         programmes.values.forEach { it.sortBy(Programme::startMs) }
+        stringPool.clear()
         return programmes
     }
 

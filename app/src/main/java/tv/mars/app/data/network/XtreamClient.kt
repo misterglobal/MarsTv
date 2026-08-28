@@ -27,6 +27,12 @@ class XtreamClient(
     private val xmlTvParser: XmlTvParser,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val stringPool = mutableMapOf<String, String>()
+
+    private fun intern(s: String?): String? {
+        if (s == null) return null
+        return stringPool.getOrPut(s) { s }
+    }
 
     suspend fun loadCatalog(account: IptvAccount): CatalogBundle {
         validate(account)
@@ -58,7 +64,7 @@ class XtreamClient(
             movies = movies,
             series = series,
             programmesByEpgId = programmes,
-        )
+        ).also { stringPool.clear() }
     }
 
     suspend fun loadSeriesDetails(account: IptvAccount, series: MediaContent): SeriesDetails {
@@ -125,10 +131,10 @@ class XtreamClient(
         action: String,
         kind: ContentKind,
     ): List<Category> = mapArray(account, action) { item ->
-        val id = item.string("category_id")
-        val name = item.string("category_name")
-        if (id.isBlank() || name.isBlank()) null else Category(
-            key = "${account.id}:${kind.name.lowercase()}:category:$id",
+        val id = intern(item.string("category_id"))
+        val name = intern(item.string("category_name"))
+        if (id.isNullOrBlank() || name.isNullOrBlank()) null else Category(
+            key = intern("${account.id}:${kind.name.lowercase()}:category:$id") ?: "",
             remoteId = id,
             name = name,
             kind = kind,
@@ -139,19 +145,19 @@ class XtreamClient(
         account: IptvAccount,
         categoryNames: Map<String, String>,
     ): List<Channel> = mapArray(account, "get_live_streams") { item ->
-        val id = item.string("stream_id")
-        if (id.isBlank()) return@mapArray null
+        val id = intern(item.string("stream_id"))
+        if (id.isNullOrBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         val extension = item.string("container_extension").ifBlank { "ts" }
         Channel(
-            key = "${account.id}:live:$id",
+            key = intern("${account.id}:live:$id") ?: "",
             remoteId = id,
             accountId = account.id,
-            name = item.string("name").ifBlank { "Channel $id" },
-            categoryKey = "${account.id}:live:category:$categoryId",
-            categoryName = categoryNames[categoryId] ?: "Uncategorized",
-            logoUrl = item.string("stream_icon"),
-            epgId = item.string("epg_channel_id").ifBlank { item.string("name") },
+            name = intern(item.string("name").ifBlank { "Channel $id" }) ?: "",
+            categoryKey = intern("${account.id}:live:category:$categoryId") ?: "",
+            categoryName = intern(categoryNames[categoryId] ?: "Uncategorized") ?: "",
+            logoUrl = intern(item.string("stream_icon")) ?: "",
+            epgId = intern(item.string("epg_channel_id").ifBlank { item.string("name") }) ?: "",
             playbackUrl = streamUrl(account, "live", id, extension),
             supportsCatchUp = item.string("tv_archive") == "1",
             catchUpDays = item.int("tv_archive_duration"),
@@ -162,22 +168,22 @@ class XtreamClient(
         account: IptvAccount,
         categoryNames: Map<String, String>,
     ): List<MediaContent> = mapArray(account, "get_vod_streams") { item ->
-        val id = item.string("stream_id")
-        if (id.isBlank()) return@mapArray null
+        val id = intern(item.string("stream_id"))
+        if (id.isNullOrBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         val extension = item.string("container_extension").ifBlank { "mp4" }
         MediaContent(
-            key = "${account.id}:movie:$id",
+            key = intern("${account.id}:movie:$id") ?: "",
             remoteId = id,
             accountId = account.id,
-            title = item.string("name").ifBlank { "Movie $id" },
+            title = intern(item.string("name").ifBlank { "Movie $id" }) ?: "",
             kind = ContentKind.MOVIE,
-            categoryKey = "${account.id}:movie:category:$categoryId",
-            categoryName = categoryNames[categoryId] ?: "Uncategorized",
-            artworkUrl = item.string("stream_icon"),
+            categoryKey = intern("${account.id}:movie:category:$categoryId") ?: "",
+            categoryName = intern(categoryNames[categoryId] ?: "Uncategorized") ?: "",
+            artworkUrl = intern(item.string("stream_icon")) ?: "",
             playbackUrl = streamUrl(account, "movie", id, extension),
-            rating = item.string("rating_5based").ifBlank { item.string("rating") },
-            year = item.string("year").ifBlank { item.string("release_date").take(4) },
+            rating = intern(item.string("rating_5based").ifBlank { item.string("rating") }) ?: "",
+            year = intern(item.string("year").ifBlank { item.string("release_date").take(4) }) ?: "",
         )
     }
 
@@ -185,22 +191,22 @@ class XtreamClient(
         account: IptvAccount,
         categoryNames: Map<String, String>,
     ): List<MediaContent> = mapArray(account, "get_series") { item ->
-        val id = item.string("series_id")
-        if (id.isBlank()) return@mapArray null
+        val id = intern(item.string("series_id"))
+        if (id.isNullOrBlank()) return@mapArray null
         val categoryId = item.string("category_id").ifBlank { "uncategorized" }
         MediaContent(
-            key = "${account.id}:series:$id",
+            key = intern("${account.id}:series:$id") ?: "",
             remoteId = id,
             accountId = account.id,
-            title = item.string("name").ifBlank { "Series $id" },
+            title = intern(item.string("name").ifBlank { "Series $id" }) ?: "",
             kind = ContentKind.SERIES,
-            categoryKey = "${account.id}:series:category:$categoryId",
-            categoryName = categoryNames[categoryId] ?: "Uncategorized",
-            artworkUrl = item.string("cover"),
-            backdropUrl = item.array("backdrop_path").firstOrNull()?.jsonPrimitive?.contentOrNull.orEmpty(),
-            description = item.string("plot"),
-            rating = item.string("rating_5based").ifBlank { item.string("rating") },
-            year = item.string("releaseDate").take(4),
+            categoryKey = intern("${account.id}:series:category:$categoryId") ?: "",
+            categoryName = intern(categoryNames[categoryId] ?: "Uncategorized") ?: "",
+            artworkUrl = intern(item.string("cover")) ?: "",
+            backdropUrl = intern(item.array("backdrop_path").firstOrNull()?.jsonPrimitive?.contentOrNull.orEmpty()) ?: "",
+            description = intern(item.string("plot")) ?: "",
+            rating = intern(item.string("rating_5based").ifBlank { item.string("rating") }) ?: "",
+            year = intern(item.string("releaseDate").take(4)) ?: "",
             seriesId = id,
         )
     }
@@ -211,20 +217,20 @@ class XtreamClient(
         fallbackEpisode: Int,
         item: JsonObject,
     ): Episode {
-        val id = item.string("id").ifBlank { item.string("stream_id") }
+        val id = intern(item.string("id").ifBlank { item.string("stream_id") }) ?: ""
         val extension = item.string("container_extension").ifBlank { "mp4" }
         val info = item.obj("info")
         return Episode(
-            key = "${account.id}:episode:$id",
+            key = intern("${account.id}:episode:$id") ?: "",
             remoteId = id,
             accountId = account.id,
-            title = item.string("title").ifBlank { "Episode ${item.int("episode_num", fallbackEpisode)}" },
+            title = intern(item.string("title").ifBlank { "Episode ${item.int("episode_num", fallbackEpisode)}" }) ?: "",
             seasonNumber = item.int("season", fallbackSeason),
             episodeNumber = item.int("episode_num", fallbackEpisode),
             playbackUrl = streamUrl(account, "series", id, extension),
-            artworkUrl = info?.string("movie_image").orEmpty(),
-            description = info?.string("plot").orEmpty(),
-            durationText = info?.string("duration").orEmpty(),
+            artworkUrl = intern(info?.string("movie_image")) ?: "",
+            description = intern(info?.string("plot")) ?: "",
+            durationText = intern(info?.string("duration")) ?: "",
         )
     }
 

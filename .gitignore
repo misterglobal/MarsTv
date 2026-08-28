@@ -6,6 +6,7 @@
 .qodo/
 .gradle/
 .gradle-bootstrap/
+.artifacts/
 
 # Local configuration and secrets
 local.properties
@@ -23,6 +24,7 @@ providers.properties
 **/generated/
 **/out/
 **/tmp/
+app/release/
 
 # APK/AAB artifacts
 *.apk
@@ -32,4 +34,3 @@ providers.properties
 
 # Gradle wrapper local state
 gradle-app-home/
-

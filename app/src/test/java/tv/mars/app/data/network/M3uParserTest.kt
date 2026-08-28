@@ -36,7 +36,7 @@ class M3uParserTest {
         assertEquals(1, result.liveCategories.size)
         assertSame(result.channels[0].categoryKey, result.channels[1].categoryKey)
         assertSame(result.channels[0].categoryName, result.channels[1].categoryName)
-        assertEquals(listOf(1, 2), result.seriesDetails.values.single().episodesBySeason[1]?.map { it.episodeNumber })
+        assertEquals(listOf(1, 2), result.episodesBySeriesId.values.single().map { it.episodeNumber })
         assertEquals(4, result.stats.totalEntries)
         assertEquals(0, result.stats.unclassifiedEntries)
     }

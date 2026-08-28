@@ -62,7 +62,7 @@ data class MarsUiState(
 class MarsTvViewModel(application: Application) : AndroidViewModel(application) {
     private val stateStore = SecureStateStore(application)
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
-    private val repository = IptvRepository()
+    private val repository = IptvRepository(catalogPersistence)
     private val catalogCache = ConcurrentHashMap<String, CatalogBundle>()
     private val _uiState = MutableStateFlow(MarsUiState())
     val uiState: StateFlow<MarsUiState> = _uiState.asStateFlow()
@@ -85,7 +85,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 val activeId = _uiState.value.activeAccount?.id
-                if (activeId != null && (activeId != previousAccount || _uiState.value.catalog.accountId != activeId)) {
+                if (activeId != null && ((activeId != previousAccount) || (_uiState.value.catalog.accountId != activeId))) {
                     loadActiveAccount()
                 }
             }

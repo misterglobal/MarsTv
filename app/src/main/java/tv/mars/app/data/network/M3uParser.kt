@@ -27,7 +27,7 @@ data class M3uDocument(
     val channels: List<Channel>,
     val movies: List<MediaContent>,
     val series: List<MediaContent>,
-    val seriesDetails: Map<String, SeriesDetails>,
+    val episodesBySeriesId: Map<String, List<Episode>>,
     val stats: M3uParseStats,
 )
 
@@ -44,6 +44,12 @@ class M3uParser {
     private val whitespacePattern = Regex("\\s+")
     private val combiningMarkPattern = Regex("\\p{M}+")
     private val slugSeparatorPattern = Regex("[^a-z0-9]+")
+    private val stringPool = mutableMapOf<String, String>()
+
+    private fun intern(s: String?): String? {
+        if (s == null) return null
+        return stringPool.getOrPut(s) { s }
+    }
 
     fun parse(account: IptvAccount, text: String): M3uDocument =
         parse(account, text.byteInputStream())
@@ -97,7 +103,7 @@ class M3uParser {
                     ContentKind.LIVE -> "Uncategorized"
                 }
             }
-            val categoryKey = "${kind.name.lowercase(Locale.US)}:${slug(group)}"
+            val categoryKey = intern("${kind.name.lowercase(Locale.US)}:${slug(group)}") ?: "unknown"
             val category = when (kind) {
                 ContentKind.LIVE -> liveCategories
                 ContentKind.MOVIE -> movieCategories
@@ -105,22 +111,22 @@ class M3uParser {
             }.getOrPut(categoryKey) {
                 Category(
                     key = categoryKey,
-                    remoteId = categoryKey.substringAfter(':'),
-                    name = group,
+                    remoteId = intern(categoryKey.substringAfter(':')) ?: "",
+                    name = intern(group) ?: "Uncategorized",
                     kind = if (kind == ContentKind.EPISODE) ContentKind.SERIES else kind,
                 )
             }
 
             when (kind) {
                 ContentKind.LIVE -> channels += Channel(
-                    key = "${account.id}:live:$remoteId",
-                    remoteId = remoteId,
+                    key = intern("${account.id}:live:$remoteId") ?: "",
+                    remoteId = intern(remoteId) ?: "",
                     accountId = account.id,
                     name = title,
                     categoryKey = category.key,
                     categoryName = category.name,
-                    logoUrl = attrs["tvg-logo"].orEmpty(),
-                    epgId = attrs["tvg-id"].orEmpty().ifBlank { title },
+                    logoUrl = intern(attrs["tvg-logo"]) ?: "",
+                    epgId = intern(attrs["tvg-id"].orEmpty().ifBlank { title }) ?: "",
                     playbackUrl = resolvedUrl,
                     supportsCatchUp = attrs["catchup"].orEmpty().isNotBlank() || attrs["catchup-source"].orEmpty().isNotBlank(),
                     catchUpDays = attrs["catchup-days"]?.toIntOrNull() ?: 0,
@@ -128,14 +134,14 @@ class M3uParser {
                 )
 
                 ContentKind.MOVIE -> movies += MediaContent(
-                    key = "${account.id}:movie:$remoteId",
-                    remoteId = remoteId,
+                    key = intern("${account.id}:movie:$remoteId") ?: "",
+                    remoteId = intern(remoteId) ?: "",
                     accountId = account.id,
                     title = title,
                     kind = ContentKind.MOVIE,
                     categoryKey = category.key,
                     categoryName = category.name,
-                    artworkUrl = attrs["tvg-logo"].orEmpty(),
+                    artworkUrl = intern(attrs["tvg-logo"]) ?: "",
                     playbackUrl = resolvedUrl,
                 )
 
@@ -145,23 +151,20 @@ class M3uParser {
                     remoteId = remoteId,
                     title = title,
                     category = category,
-                    artworkUrl = attrs["tvg-logo"].orEmpty(),
+                    artworkUrl = intern(attrs["tvg-logo"]) ?: "",
                     playbackUrl = resolvedUrl,
                 )
             }
         }
+        stringPool.clear()
 
-        val seriesDetails = linkedMapOf<String, SeriesDetails>()
+        val episodesBySeriesId = linkedMapOf<String, List<Episode>>()
         val series = seriesByTitle.values
             .sortedBy { it.media.title.lowercase(Locale.US) }
             .map { accumulator ->
-                accumulator.episodesBySeason.values.forEach { episodes ->
-                    episodes.sortWith(compareBy(Episode::episodeNumber, Episode::title))
-                }
-                seriesDetails[accumulator.media.seriesId] = SeriesDetails(
-                    series = accumulator.media,
-                    episodesBySeason = accumulator.episodesBySeason,
-                )
+                val allEpisodes = accumulator.episodesBySeason.values.flatten()
+                    .sortedWith(compareBy(Episode::seasonNumber, Episode::episodeNumber, Episode::title))
+                episodesBySeriesId[accumulator.media.seriesId] = allEpisodes
                 accumulator.media
             }
         return M3uDocument(
@@ -172,14 +175,12 @@ class M3uParser {
             channels = channels,
             movies = movies,
             series = series,
-            seriesDetails = seriesDetails,
+            episodesBySeriesId = episodesBySeriesId,
             stats = M3uParseStats(
                 totalEntries = itemIndex,
                 liveEntries = channels.size,
                 movieEntries = movies.size,
-                seriesEpisodes = seriesDetails.values.sumOf { details ->
-                    details.episodesBySeason.values.sumOf { episodes -> episodes.size }
-                },
+                seriesEpisodes = episodesBySeriesId.values.sumOf { it.size },
                 unclassifiedEntries = unclassifiedEntries,
             ),
         )
@@ -199,13 +200,13 @@ class M3uParser {
             ?.ifBlank { category.name }
             ?: category.name.ifBlank { title }
         val accumulator = seriesByTitle.getOrPut(seriesTitle) {
-            val seriesId = "m3u-${slug(seriesTitle)}-${remoteId.takeLast(6)}"
+            val seriesId = intern("m3u-${slug(seriesTitle)}-${remoteId.takeLast(6)}") ?: ""
             SeriesAccumulator(
                 media = MediaContent(
-                    key = "${account.id}:series:$seriesId",
+                    key = intern("${account.id}:series:$seriesId") ?: "",
                     remoteId = seriesId,
                     accountId = account.id,
-                    title = seriesTitle,
+                    title = intern(seriesTitle) ?: "",
                     kind = ContentKind.SERIES,
                     categoryKey = category.key,
                     categoryName = category.name,
@@ -225,10 +226,10 @@ class M3uParser {
             ?: match?.groupValues?.getOrNull(4)?.toIntOrNull()
             ?: episodes.size + 1
         episodes += Episode(
-            key = "${account.id}:episode:$remoteId",
-            remoteId = remoteId,
+            key = intern("${account.id}:episode:$remoteId") ?: "",
+            remoteId = intern(remoteId) ?: "",
             accountId = account.id,
-            title = title,
+            title = intern(title) ?: "",
             seasonNumber = season,
             episodeNumber = number,
             playbackUrl = playbackUrl,

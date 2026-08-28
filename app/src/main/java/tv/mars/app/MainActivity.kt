@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_UI_HIDDEN) {
+        if (level >= TRIM_MEMORY_RUNNING_LOW || level == TRIM_MEMORY_UI_HIDDEN) {
             try {
                 ViewModelProvider(this).get(MarsTvViewModel::class.java).clearHiddenCaches()
             } catch (_: Exception) {

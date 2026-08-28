@@ -23,7 +23,9 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.ConcurrentHashMap
 
-class IptvRepository {
+class IptvRepository(
+    private val persistence: tv.mars.app.data.local.CatalogPersistence
+) {
     private companion object {
         const val TAG = "IptvRepository"
     }
@@ -32,10 +34,16 @@ class IptvRepository {
     private val xmlTv = XmlTvParser()
     private val m3u = M3uParser()
     private val xtream = XtreamClient(network, xmlTv)
-    private val m3uSeriesCache = ConcurrentHashMap<String, Map<String, SeriesDetails>>()
+
+    // We use a limited cache for M3U series episodes to prevent OOM on massive playlists.
+    // The key is accountId, then seriesId -> List<Episode>.
+    private val m3uSeriesCache = ConcurrentHashMap<String, Map<String, List<tv.mars.app.core.Episode>>>()
 
     suspend fun loadCatalog(account: IptvAccount): CatalogBundle = when (account.sourceType) {
-        SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> xtream.loadCatalog(account)
+        SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> {
+            clearCache(account.id) // Clear M3U cache if we switch to Xtream
+            xtream.loadCatalog(account)
+        }
         SourceType.M3U -> loadM3u(account)
     }
 
@@ -47,8 +55,10 @@ class IptvRepository {
                 if (xtreamAccount != null && series.seriesId.startsWith("m3u-").not()) {
                     xtream.loadSeriesDetails(xtreamAccount, series)
                 } else {
-                    m3uSeriesCache[account.id]?.get(series.seriesId)
-                        ?: SeriesDetails(series, emptyMap())
+                    val accountEpisodes = m3uSeriesCache[account.id]
+                        ?: persistence.loadEpisodes(account.id)?.also { m3uSeriesCache[account.id] = it }
+                    val episodes = accountEpisodes?.get(series.seriesId)
+                    SeriesDetails(series, episodes?.groupBy { it.seasonNumber }.orEmpty())
                 }
             }
         }
@@ -135,7 +145,8 @@ class IptvRepository {
                 "Movies: ${doc.stats.movieEntries}; Series episodes: ${doc.stats.seriesEpisodes}; " +
                 "Unclassified: ${doc.stats.unclassifiedEntries}",
         )
-        m3uSeriesCache[account.id] = doc.seriesDetails
+        persistence.saveEpisodes(account.id, doc.episodesBySeriesId)
+        m3uSeriesCache[account.id] = doc.episodesBySeriesId
         val programmes = if (doc.epgUrl.isNotBlank()) {
             runCatching {
                 val resolvedEpg = resolve(account.m3uUrl, doc.epgUrl)
