@@ -16,6 +16,9 @@ interface CatalogDao {
     @Query("SELECT active_generation FROM catalog_imports WHERE account_id = :accountId")
     suspend fun activeGeneration(accountId: String): String?
 
+    @Query("SELECT loaded_at FROM catalog_imports WHERE account_id = :accountId")
+    suspend fun catalogLoadedAt(accountId: String): Long?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImport(value: CatalogImportEntity)
 
@@ -40,6 +43,15 @@ interface CatalogDao {
         ORDER BY categories.name COLLATE NOCASE, categories.category_key""",
     )
     fun observeCategories(accountId: String, kind: String): Flow<List<CatalogCategoryEntity>>
+
+    @Query(
+        """SELECT items.epg_id, items.title FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId AND items.kind = 'LIVE'""",
+    )
+    suspend fun channelReferences(accountId: String): List<CatalogChannelReference>
 
     @Query(
         """SELECT items.* FROM catalog_items AS items

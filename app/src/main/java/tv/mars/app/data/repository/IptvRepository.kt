@@ -14,7 +14,6 @@ import tv.mars.app.core.PlayerRequest
 import tv.mars.app.core.Programme
 import tv.mars.app.core.SeriesDetails
 import tv.mars.app.core.SourceType
-import tv.mars.app.data.network.M3uDocument
 import tv.mars.app.data.network.M3uParser
 import tv.mars.app.data.network.NetworkClient
 import tv.mars.app.data.network.XmlTvParser
@@ -40,12 +39,16 @@ class IptvRepository(
     private val xtream = XtreamClient(network, xmlTv)
     private val m3uRoomImporter = M3uRoomImporter(m3u, roomCatalog)
 
-    suspend fun loadCatalog(account: IptvAccount): CatalogBundle = when (account.sourceType) {
+    suspend fun refreshCatalog(account: IptvAccount): Long = when (account.sourceType) {
         SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> {
-            xtream.loadCatalog(account).also { roomCatalog.replaceCatalog(it) }
+            val catalog = xtream.loadCatalog(account)
+            roomCatalog.replaceCatalog(catalog)
+            catalog.loadedAt
         }
         SourceType.M3U -> loadM3u(account)
     }
+
+    suspend fun catalogLoadedAt(accountId: String): Long? = roomCatalog.catalogLoadedAt(accountId)
 
     suspend fun loadSeriesDetails(account: IptvAccount, series: MediaContent): SeriesDetails =
         when (account.sourceType) {
@@ -158,7 +161,7 @@ class IptvRepository(
         )
     }
 
-    private suspend fun loadM3u(account: IptvAccount): CatalogBundle {
+    private suspend fun loadM3u(account: IptvAccount): Long {
         // A refresh must not retain the previous episode graph while a new one is built.
         account.xtreamAccountFromM3u()?.let { xtreamAccount ->
             val xtreamResult = runCatching { xtream.loadCatalog(xtreamAccount) }
@@ -170,45 +173,35 @@ class IptvRepository(
                         "Movies: ${catalog.movies.size}; Series: ${catalog.series.size}",
                 )
                 roomCatalog.replaceCatalog(catalog)
-                return catalog
+                return catalog.loadedAt
             }
             Log.w(TAG, "Xtream discovery failed; using M3U classification fallback")
         }
 
-        var parsed: M3uDocument? = null
+        var parsed: tv.mars.app.data.network.M3uStreamResult? = null
         network.getStream(account.m3uUrl) { stream ->
-            parsed = m3uRoomImporter.importWithCompatibilityDocument(account, stream)
+            parsed = m3uRoomImporter.import(account, stream)
         }
-        val doc = parsed ?: error("Failed to parse M3U playlist")
+        val result = parsed ?: error("Failed to parse M3U playlist")
         Log.i(
             TAG,
-            "Playlist entries: ${doc.stats.totalEntries}; Live: ${doc.stats.liveEntries}; " +
-                "Movies: ${doc.stats.movieEntries}; Series episodes: ${doc.stats.seriesEpisodes}; " +
-                "Unclassified: ${doc.stats.unclassifiedEntries}",
+            "Playlist entries: ${result.stats.totalEntries}; Live: ${result.stats.liveEntries}; " +
+                "Movies: ${result.stats.movieEntries}; Series episodes: ${result.stats.seriesEpisodes}; " +
+                "Unclassified: ${result.stats.unclassifiedEntries}",
         )
-        val programmes = if (doc.epgUrl.isNotBlank()) {
+        if (result.epgUrl.isNotBlank()) {
             runCatching {
-                val resolvedEpg = resolve(account.m3uUrl, doc.epgUrl)
-                var map = emptyMap<String, List<Programme>>()
+                val resolvedEpg = resolve(account.m3uUrl, result.epgUrl)
+                val references = roomCatalog.channelReferences(account.id)
+                val programmeImport = roomCatalog.beginProgrammeImport(account.id)
                 network.getStream(resolvedEpg) { stream ->
-                    map = xmlTv.parse(stream, doc.channels)
+                    xmlTv.parseStreamingReferences(stream, references) { batch ->
+                        programmeImport?.write(batch)
+                    }
                 }
-                map
-            }.getOrDefault(emptyMap())
-        } else {
-            emptyMap()
+            }.onFailure { Log.w(TAG, "Could not refresh the M3U programme guide", it) }
         }
-        roomCatalog.replaceProgrammes(account.id, programmes)
-        return CatalogBundle(
-            accountId = account.id,
-            liveCategories = doc.liveCategories,
-            movieCategories = doc.movieCategories,
-            seriesCategories = doc.seriesCategories,
-            channels = doc.channels,
-            movies = doc.movies,
-            series = doc.series,
-            programmesByEpgId = programmes,
-        )
+        return roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis()
     }
 
     private fun resolve(base: String, candidate: String): String = runCatching {

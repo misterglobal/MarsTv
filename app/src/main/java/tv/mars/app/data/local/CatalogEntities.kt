@@ -90,3 +90,8 @@ data class CatalogProgrammeEntity(
     @ColumnInfo(name = "start_ms") val startMs: Long,
     @ColumnInfo(name = "end_ms") val endMs: Long,
 )
+
+data class CatalogChannelReference(
+    @ColumnInfo(name = "epg_id") val epgId: String,
+    val title: String,
+)

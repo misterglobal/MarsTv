@@ -35,6 +35,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -271,7 +272,7 @@ private fun DestinationContent(
         )
         MainDestination.SEARCH -> SearchScreen(
             accountId = accountId,
-            catalogRevision = state.catalog.loadedAt,
+            catalogRevision = state.catalogRevision,
             query = state.searchQuery,
             onQueryChange = viewModel::setSearchQuery,
             blockedCategoryKeys = blockedCategoryKeys,
@@ -285,7 +286,7 @@ private fun DestinationContent(
         )
         MainDestination.LIBRARY -> LibraryScreen(
             accountId = accountId,
-            catalogRevision = state.catalog.loadedAt,
+            catalogRevision = state.catalogRevision,
             favouriteKeys = state.favouriteKeys,
             blockedCategoryKeys = blockedCategoryKeys,
             favouritesSource = { keys, blocked -> viewModel.favouriteCatalog(accountId, keys, blocked) },
@@ -299,22 +300,30 @@ private fun DestinationContent(
             onClearHistory = viewModel::clearHistory,
             modifier = modifier,
         )
-        MainDestination.SETTINGS -> SettingsScreen(
-            accounts = state.local.accounts,
-            activeAccountId = state.activeAccount?.id,
-            profiles = state.local.profiles,
-            activeProfile = state.activeProfile,
-            categories = state.catalog.liveCategories + state.catalog.movieCategories + state.catalog.seriesCategories,
-            pinMatches = viewModel::pinMatches,
-            onSelectAccount = viewModel::selectAccount,
-            onRemoveAccount = viewModel::removeAccount,
-            onAddAccount = viewModel::showAddAccount,
-            onRefresh = { viewModel.loadActiveAccount(force = true) },
-            onOpenProfiles = viewModel::showProfiles,
-            onSetPin = viewModel::setProfilePin,
-            onToggleCategory = viewModel::toggleCategoryRestriction,
-            modifier = modifier,
-        )
+        MainDestination.SETTINGS -> {
+            val liveCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.LIVE) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            val movieCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.MOVIE) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            val seriesCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.SERIES) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            SettingsScreen(
+                accounts = state.local.accounts,
+                activeAccountId = state.activeAccount?.id,
+                profiles = state.local.profiles,
+                activeProfile = state.activeProfile,
+                categories = liveCategories + movieCategories + seriesCategories,
+                pinMatches = viewModel::pinMatches,
+                onSelectAccount = viewModel::selectAccount,
+                onRemoveAccount = viewModel::removeAccount,
+                onAddAccount = viewModel::showAddAccount,
+                onRefresh = { viewModel.loadActiveAccount(force = true) },
+                onOpenProfiles = viewModel::showProfiles,
+                onSetPin = viewModel::setProfilePin,
+                onToggleCategory = viewModel::toggleCategoryRestriction,
+                modifier = modifier,
+            )
+        }
     }
 }
 

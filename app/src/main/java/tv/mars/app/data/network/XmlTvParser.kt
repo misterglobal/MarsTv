@@ -1,5 +1,7 @@
 package tv.mars.app.data.network
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import tv.mars.app.core.Channel
@@ -12,38 +14,56 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.zip.GZIPInputStream
 
+data class XmlTvChannelReference(val epgId: String, val name: String)
+
+data class XmlTvParseStats(val programmeCount: Int)
+
 class XmlTvParser {
     private val offsetPattern = Regex("([+-]\\d{4})")
     private val normalizationPattern = Regex("[^a-z0-9]")
-    private val stringPool = mutableMapOf<String, String>()
 
-    private fun intern(s: String?): String? {
-        if (s == null) return null
-        return stringPool.getOrPut(s) { s }
-    }
-
-    fun parse(bytes: ByteArray, channels: List<Channel>): Map<String, List<Programme>> =
+    suspend fun parse(bytes: ByteArray, channels: List<Channel>): Map<String, List<Programme>> =
         parse(ByteArrayInputStream(bytes), channels)
 
-    fun parse(input: InputStream, channels: List<Channel>): Map<String, List<Programme>> {
-        if (channels.isEmpty()) return emptyMap()
-        
+    suspend fun parse(input: InputStream, channels: List<Channel>): Map<String, List<Programme>> =
+        parseReferences(input, channels.map { XmlTvChannelReference(it.epgId, it.name) })
+
+    suspend fun parseReferences(
+        input: InputStream,
+        channels: List<XmlTvChannelReference>,
+    ): Map<String, List<Programme>> {
+        val programmes = mutableMapOf<String, MutableList<Programme>>()
+        parseStreamingReferences(input, channels) { batch ->
+            batch.forEach { programme ->
+                programmes.getOrPut(programme.channelEpgId) { mutableListOf() } += programme
+            }
+        }
+        programmes.values.forEach { it.sortBy(Programme::startMs) }
+        return programmes
+    }
+
+    suspend fun parseStreamingReferences(
+        input: InputStream,
+        channels: List<XmlTvChannelReference>,
+        batchSize: Int = DEFAULT_BATCH_SIZE,
+        emit: suspend (List<Programme>) -> Unit,
+    ): XmlTvParseStats {
+        require(batchSize in 1..MAX_BATCH_SIZE) { "XMLTV batch size must be between 1 and $MAX_BATCH_SIZE" }
+        if (channels.isEmpty()) return XmlTvParseStats(0)
+
         val bufferedInput = java.io.BufferedInputStream(input)
         val finalInput = if (isGzipped(bufferedInput)) GZIPInputStream(bufferedInput) else bufferedInput
-        
-        val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
-            setInput(finalInput, null)
-        }
-
-        val directIds = channels.map(Channel::epgId).toSet()
+        val parser = XmlPullParserFactory.newInstance().newPullParser().apply { setInput(finalInput, null) }
+        val directIds = channels.map(XmlTvChannelReference::epgId).toSet()
         val nameToId = channels.associate { normalize(it.name) to it.epgId }
         val programmeLimitPerChannel = (MAX_PROGRAMMES_TOTAL / directIds.size.coerceAtLeast(1))
             .coerceIn(MIN_PROGRAMMES_PER_CHANNEL, MAX_PROGRAMMES_PER_CHANNEL)
         val idRemap = mutableMapOf<String, String>()
-        val programmes = mutableMapOf<String, MutableList<Programme>>()
+        val programmeCounts = mutableMapOf<String, Int>()
         val now = System.currentTimeMillis()
         val earliestProgrammeEnd = now - PAST_WINDOW_MS
         val latestProgrammeStart = now + FUTURE_WINDOW_MS
+        var batch = ArrayList<Programme>(batchSize)
         var programmeCount = 0
 
         var event = parser.eventType
@@ -57,6 +77,7 @@ class XmlTvParser {
         var textTarget = ""
 
         while (event != XmlPullParser.END_DOCUMENT) {
+            currentCoroutineContext().ensureActive()
             when (event) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "channel" -> {
@@ -92,24 +113,26 @@ class XmlTvParser {
                         if (target != null) idRemap[channelBlockId] = target
                     }
                     "programme" -> {
-                        val effectiveId = intern(idRemap[programmeChannel]
-                            ?: programmeChannel.takeIf { it in directIds })
+                        val effectiveId = idRemap[programmeChannel] ?: programmeChannel.takeIf { it in directIds }
+                        val channelCount = effectiveId?.let { programmeCounts[it] } ?: 0
                         if (
                             effectiveId != null && title.isNotBlank() &&
                             programmeStart > 0 && programmeEnd > programmeStart &&
                             programmeEnd >= earliestProgrammeEnd && programmeStart <= latestProgrammeStart &&
-                            programmeCount < MAX_PROGRAMMES_TOTAL
+                            programmeCount < MAX_PROGRAMMES_TOTAL && channelCount < programmeLimitPerChannel
                         ) {
-                            val channelProgrammes = programmes.getOrPut(effectiveId) { mutableListOf() }
-                            if (channelProgrammes.size < programmeLimitPerChannel) {
-                                channelProgrammes += Programme(
-                                    channelEpgId = effectiveId,
-                                    title = intern(title.trim().take(MAX_TITLE_CHARS)) ?: "",
-                                    description = intern(description.trim().take(MAX_DESCRIPTION_CHARS)) ?: "",
-                                    startMs = programmeStart,
-                                    endMs = programmeEnd,
-                                )
-                                programmeCount++
+                            batch += Programme(
+                                channelEpgId = effectiveId,
+                                title = title.trim().take(MAX_TITLE_CHARS),
+                                description = description.trim().take(MAX_DESCRIPTION_CHARS),
+                                startMs = programmeStart,
+                                endMs = programmeEnd,
+                            )
+                            programmeCounts[effectiveId] = channelCount + 1
+                            programmeCount++
+                            if (batch.size == batchSize) {
+                                emit(batch)
+                                batch = ArrayList(batchSize)
                             }
                         }
                     }
@@ -117,10 +140,8 @@ class XmlTvParser {
             }
             event = parser.next()
         }
-
-        programmes.values.forEach { it.sortBy(Programme::startMs) }
-        stringPool.clear()
-        return programmes
+        if (batch.isNotEmpty()) emit(batch)
+        return XmlTvParseStats(programmeCount)
     }
 
     private fun isGzipped(input: java.io.BufferedInputStream): Boolean {
@@ -146,12 +167,14 @@ class XmlTvParser {
         .replace(normalizationPattern, "")
 
     private companion object {
+        const val DEFAULT_BATCH_SIZE = 500
+        const val MAX_BATCH_SIZE = 500
         const val MAX_PROGRAMMES_TOTAL = 100_000
         const val MIN_PROGRAMMES_PER_CHANNEL = 8
         const val MAX_PROGRAMMES_PER_CHANNEL = 64
         const val MAX_TITLE_CHARS = 300
         const val MAX_DESCRIPTION_CHARS = 1_000
-        const val PAST_WINDOW_MS = 6L * 3_600_000L
-        const val FUTURE_WINDOW_MS = 36L * 3_600_000L
+        const val PAST_WINDOW_MS = 7L * 24 * 3_600_000L
+        const val FUTURE_WINDOW_MS = 14L * 24 * 3_600_000L
     }
 }

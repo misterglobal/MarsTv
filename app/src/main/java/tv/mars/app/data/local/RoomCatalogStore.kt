@@ -19,6 +19,7 @@ import tv.mars.app.core.Episode
 import tv.mars.app.core.MediaContent
 import tv.mars.app.core.Programme
 import tv.mars.app.data.network.M3uBatch
+import tv.mars.app.data.network.XmlTvChannelReference
 import java.util.UUID
 
 class RoomCatalogStore(private val database: MarsTvDatabase) {
@@ -65,6 +66,11 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         ImportSession(accountId, UUID.randomUUID().toString(), loadedAt)
 
     suspend fun hasCatalog(accountId: String): Boolean = dao.hasActiveImport(accountId)
+
+    suspend fun catalogLoadedAt(accountId: String): Long? = dao.catalogLoadedAt(accountId)
+
+    suspend fun channelReferences(accountId: String): List<XmlTvChannelReference> =
+        dao.channelReferences(accountId).map { XmlTvChannelReference(it.epgId, it.title) }
 
     inner class ImportSession internal constructor(
         private val accountId: String,
@@ -200,6 +206,30 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         )
     }
 
+    suspend fun beginProgrammeImport(accountId: String): ProgrammeImportSession? {
+        val generation = dao.activeGeneration(accountId) ?: return null
+        deleteBatches(
+            load = { dao.activeProgrammes(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteProgrammes,
+        )
+        return ProgrammeImportSession(accountId, generation)
+    }
+
+    inner class ProgrammeImportSession internal constructor(
+        private val accountId: String,
+        private val generation: String,
+    ) {
+        suspend fun write(programmes: List<Programme>) {
+            require(programmes.size <= IMPORT_BATCH_SIZE) { "EPG import batch exceeds $IMPORT_BATCH_SIZE rows" }
+            currentCoroutineContext().ensureActive()
+            val entities = programmes.asSequence()
+                .filterRetainedProgrammes()
+                .map { it.toEntity(accountId, generation) }
+                .toList()
+            if (entities.isNotEmpty()) database.withTransaction { dao.insertProgrammes(entities) }
+        }
+    }
+
     suspend fun clearAccount(accountId: String) {
         deleteBatches(
             load = { dao.programmesForAccount(accountId, IMPORT_BATCH_SIZE) },
@@ -302,14 +332,17 @@ private fun Map<String, List<Programme>>.retainedProgrammeEntities(
     accountId: String,
     generation: String,
 ): Sequence<CatalogProgrammeEntity> {
+    return asSequence().flatMap { (_, programmes) ->
+        programmes.asSequence().filterRetainedProgrammes()
+            .map { it.toEntity(accountId, generation) }
+    }
+}
+
+private fun Sequence<Programme>.filterRetainedProgrammes(): Sequence<Programme> {
     val now = System.currentTimeMillis()
     val earliestEnd = now - RoomCatalogStore.PAST_EPG_RETENTION_MS
     val latestStart = now + RoomCatalogStore.FUTURE_EPG_RETENTION_MS
-    return asSequence().flatMap { (_, programmes) ->
-        programmes.asSequence()
-            .filter { it.endMs >= earliestEnd && it.startMs <= latestStart }
-            .map { it.toEntity(accountId, generation) }
-    }
+    return filter { it.endMs >= earliestEnd && it.startMs <= latestStart }
 }
 
 private fun String.escapeLikePattern(): String = replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
