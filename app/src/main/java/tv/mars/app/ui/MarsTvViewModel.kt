@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tv.mars.app.BuildConfig
 import tv.mars.app.core.CatalogBundle
+import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
 import tv.mars.app.core.Episode
@@ -235,6 +236,18 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         categoryKey: String?,
         blockedCategoryKeys: Set<String>,
     ): Flow<PagingData<MediaContent>> = repository.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
+
+    suspend fun searchCatalog(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = repository.searchCatalog(accountId, query, blockedCategoryKeys)
+
+    suspend fun favouriteCatalog(
+        accountId: String,
+        favouriteKeys: Set<String>,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = repository.favouriteCatalog(accountId, favouriteKeys, blockedCategoryKeys)
 
     fun setDestination(destination: MainDestination) {
         _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }

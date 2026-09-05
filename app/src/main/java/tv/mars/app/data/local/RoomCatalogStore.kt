@@ -11,6 +11,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import tv.mars.app.core.CatalogBundle
+import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Category
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
@@ -132,6 +133,40 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         ).flow.map { page -> page.map(CatalogItemEntity::toMedia) }
     }
 
+    suspend fun search(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup {
+        val escapedQuery = query.escapeLikePattern()
+        val blocked = blockedCategoryKeys.forSqlNotIn()
+        return CatalogLookup(
+            channels = dao.searchChannels(accountId, escapedQuery, blocked, SEARCH_CHANNEL_LIMIT)
+                .map(CatalogItemEntity::toChannel),
+            media = dao.searchMedia(accountId, escapedQuery, blocked, SEARCH_MEDIA_LIMIT)
+                .map(CatalogItemEntity::toMedia),
+        )
+    }
+
+    suspend fun favourites(
+        accountId: String,
+        favouriteKeys: Set<String>,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup {
+        if (favouriteKeys.isEmpty()) return CatalogLookup()
+        val items = dao.favouriteItems(
+            accountId = accountId,
+            itemKeys = favouriteKeys.take(MAX_FAVOURITE_KEYS),
+            blockedCategoryKeys = blockedCategoryKeys.forSqlNotIn(),
+            limit = MAX_FAVOURITE_KEYS,
+        )
+        return CatalogLookup(
+            channels = items.filter { it.kind == ContentKind.LIVE.name }.map(CatalogItemEntity::toChannel),
+            media = items.filter { it.kind == ContentKind.MOVIE.name || it.kind == ContentKind.SERIES.name }
+                .map(CatalogItemEntity::toMedia),
+        )
+    }
+
     suspend fun episodes(accountId: String, seriesId: String): List<Episode> =
         dao.episodes(accountId, seriesId).map(CatalogEpisodeEntity::toModel)
 
@@ -238,8 +273,16 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         internal const val PAGE_SIZE = 50
         internal const val MAX_PAGING_CACHE_SIZE = 300
         private const val MAX_PROGRAMMES_PER_WINDOW = 50
+        private const val SEARCH_CHANNEL_LIMIT = 30
+        private const val SEARCH_MEDIA_LIMIT = 60
+        private const val MAX_FAVOURITE_KEYS = 500
     }
 }
+
+private fun String.escapeLikePattern(): String = replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+private fun Set<String>.forSqlNotIn(): List<String> =
+    if (isEmpty()) listOf("\u0000mars-no-blocked-category") else toList()
 
 internal suspend fun <T> Sequence<T>.forEachDatabaseBatch(action: suspend (List<T>) -> Unit) {
     var batch = ArrayList<T>(RoomCatalogStore.IMPORT_BATCH_SIZE)

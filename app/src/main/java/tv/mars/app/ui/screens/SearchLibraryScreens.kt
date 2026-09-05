@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -32,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -43,7 +45,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import tv.mars.app.core.CatalogBundle
+import kotlinx.coroutines.delay
+import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
 import tv.mars.app.core.MediaContent
 import tv.mars.app.core.WatchRecord
@@ -61,25 +64,29 @@ import java.util.Date
 
 @Composable
 fun SearchScreen(
+    accountId: String,
+    catalogRevision: Long,
     query: String,
     onQueryChange: (String) -> Unit,
-    catalog: CatalogBundle,
+    blockedCategoryKeys: Set<String>,
+    searchSource: suspend (query: String, blockedCategoryKeys: Set<String>) -> CatalogLookup,
     favouriteKeys: Set<String>,
     isTelevision: Boolean,
-    isCategoryLocked: (String) -> Boolean,
     onPlayChannel: (Channel) -> Unit,
     onOpenMedia: (MediaContent) -> Unit,
     onToggleFavourite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val normalized = query.trim()
-    val channels = if (normalized.length < 2) emptyList() else catalog.channels.filter {
-        !isCategoryLocked(it.categoryKey) && (it.name.contains(normalized, true) || it.categoryName.contains(normalized, true))
-    }.take(30)
-    val media = if (normalized.length < 2) emptyList() else (catalog.movies + catalog.series).filter {
-        !isCategoryLocked(it.categoryKey) &&
-            (it.title.contains(normalized, true) || it.categoryName.contains(normalized, true) || it.year.contains(normalized, true))
-    }.take(60)
+    val lookup by produceState<CatalogLookup?>(null, accountId, catalogRevision, normalized, blockedCategoryKeys) {
+        value = null
+        if (accountId.isNotBlank() && normalized.length >= 2) {
+            delay(250)
+            value = searchSource(normalized, blockedCategoryKeys)
+        }
+    }
+    val channels = lookup?.channels.orEmpty()
+    val media = lookup?.media.orEmpty()
 
     Column(modifier = modifier.fillMaxSize()) {
         Text("Search", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
@@ -96,6 +103,7 @@ fun SearchScreen(
 
         when {
             normalized.length < 2 -> EmptyState("Start typing", "Enter at least two characters to search this account.")
+            lookup == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             channels.isEmpty() && media.isEmpty() -> EmptyState("No matches", "Try a title, channel, category, or year.")
             else -> LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (channels.isNotEmpty()) {
@@ -158,12 +166,14 @@ private fun SearchChannelCard(channel: Channel, favourite: Boolean, onClick: () 
 
 @Composable
 fun LibraryScreen(
-    catalog: CatalogBundle,
+    accountId: String,
+    catalogRevision: Long,
     favouriteKeys: Set<String>,
+    blockedCategoryKeys: Set<String>,
+    favouritesSource: suspend (favouriteKeys: Set<String>, blockedCategoryKeys: Set<String>) -> CatalogLookup,
     continueWatching: List<WatchRecord>,
     history: List<WatchRecord>,
     isTelevision: Boolean,
-    isCategoryLocked: (String) -> Boolean,
     onPlayChannel: (Channel) -> Unit,
     onOpenMedia: (MediaContent) -> Unit,
     onPlayHistory: (WatchRecord) -> Unit,
@@ -172,8 +182,11 @@ fun LibraryScreen(
     modifier: Modifier = Modifier,
 ) {
     var tab by remember { mutableIntStateOf(0) }
-    val favouriteChannels = catalog.channels.filter { it.key in favouriteKeys && !isCategoryLocked(it.categoryKey) }
-    val favouriteMedia = (catalog.movies + catalog.series).filter { it.key in favouriteKeys && !isCategoryLocked(it.categoryKey) }
+    val favourites by produceState<CatalogLookup?>(null, accountId, catalogRevision, favouriteKeys, blockedCategoryKeys) {
+        value = if (accountId.isBlank()) CatalogLookup() else {
+            favouritesSource(favouriteKeys, blockedCategoryKeys)
+        }
+    }
     val tabs = listOf("Favourites", "Continue", "History")
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -207,15 +220,19 @@ fun LibraryScreen(
         Spacer(Modifier.height(16.dp))
 
         when (tab) {
-            0 -> FavouriteLibrary(
-                channels = favouriteChannels,
-                media = favouriteMedia,
-                favouriteKeys = favouriteKeys,
-                isTelevision = isTelevision,
-                onPlayChannel = onPlayChannel,
-                onOpenMedia = onOpenMedia,
-                onToggleFavourite = onToggleFavourite,
-            )
+            0 -> if (favourites == null) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else {
+                FavouriteLibrary(
+                    channels = favourites.orEmpty().channels,
+                    media = favourites.orEmpty().media,
+                    favouriteKeys = favouriteKeys,
+                    isTelevision = isTelevision,
+                    onPlayChannel = onPlayChannel,
+                    onOpenMedia = onOpenMedia,
+                    onToggleFavourite = onToggleFavourite,
+                )
+            }
             1 -> HistoryList(
                 records = continueWatching,
                 emptyTitle = "Nothing to continue",
@@ -231,6 +248,8 @@ fun LibraryScreen(
         }
     }
 }
+
+private fun CatalogLookup?.orEmpty(): CatalogLookup = this ?: CatalogLookup()
 
 @Composable
 private fun FavouriteLibrary(

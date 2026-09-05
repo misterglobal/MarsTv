@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.paging.PagingData
 import kotlinx.coroutines.flow.Flow
 import tv.mars.app.core.CatalogBundle
+import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
 import tv.mars.app.core.IptvAccount
@@ -74,6 +75,18 @@ class IptvRepository(
         categoryKey: String?,
         blockedCategoryKeys: Set<String>,
     ): Flow<PagingData<MediaContent>> = roomCatalog.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
+
+    suspend fun searchCatalog(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = roomCatalog.search(accountId, query, blockedCategoryKeys)
+
+    suspend fun favouriteCatalog(
+        accountId: String,
+        favouriteKeys: Set<String>,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = roomCatalog.favourites(accountId, favouriteKeys, blockedCategoryKeys)
 
     suspend fun seedRoomFromLegacyCache(catalog: CatalogBundle) {
         if (roomCatalog.hasCatalog(catalog.accountId)) return

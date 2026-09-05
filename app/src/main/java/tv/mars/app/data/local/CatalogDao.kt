@@ -69,6 +69,65 @@ interface CatalogDao {
     ): PagingSource<Int, CatalogItemEntity>
 
     @Query(
+        """SELECT items.* FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId
+          AND items.kind = 'LIVE'
+          AND items.category_key NOT IN (:blockedCategoryKeys)
+          AND (items.title LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE
+            OR items.category_name LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE)
+        ORDER BY items.title COLLATE NOCASE, items.item_key
+        LIMIT :limit""",
+    )
+    suspend fun searchChannels(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: List<String>,
+        limit: Int,
+    ): List<CatalogItemEntity>
+
+    @Query(
+        """SELECT items.* FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId
+          AND items.kind IN ('MOVIE', 'SERIES')
+          AND items.category_key NOT IN (:blockedCategoryKeys)
+          AND (items.title LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE
+            OR items.category_name LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE
+            OR items.year LIKE '%' || :query || '%' ESCAPE '\' COLLATE NOCASE)
+        ORDER BY items.title COLLATE NOCASE, items.item_key
+        LIMIT :limit""",
+    )
+    suspend fun searchMedia(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: List<String>,
+        limit: Int,
+    ): List<CatalogItemEntity>
+
+    @Query(
+        """SELECT items.* FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId
+          AND items.item_key IN (:itemKeys)
+          AND items.category_key NOT IN (:blockedCategoryKeys)
+        ORDER BY items.title COLLATE NOCASE, items.item_key
+        LIMIT :limit""",
+    )
+    suspend fun favouriteItems(
+        accountId: String,
+        itemKeys: List<String>,
+        blockedCategoryKeys: List<String>,
+        limit: Int,
+    ): List<CatalogItemEntity>
+
+    @Query(
         """SELECT episodes.* FROM catalog_episodes AS episodes
         INNER JOIN catalog_imports AS imports
           ON imports.account_id = episodes.account_id
