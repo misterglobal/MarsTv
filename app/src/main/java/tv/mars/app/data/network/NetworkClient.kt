@@ -1,10 +1,14 @@
 package tv.mars.app.data.network
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -56,7 +60,7 @@ class NetworkClient {
             .header("Accept-Language", "en-US,en;q=0.9")
             .build()
 
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
                 val message = when (response.code) {
                     884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
@@ -79,7 +83,7 @@ class NetworkClient {
             .header("Accept-Language", "en-US,en;q=0.9")
             .build()
 
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
                 val message = when (response.code) {
                     884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
@@ -95,5 +99,18 @@ class NetworkClient {
                 contentEncoding = response.header("Content-Encoding").orEmpty(),
             )
         }
+    }
+
+    private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { cancel() }
+        enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resume(response) { _, cancelledResponse, _ -> cancelledResponse.close() }
+            }
+        })
     }
 }

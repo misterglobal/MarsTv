@@ -1,5 +1,6 @@
 package tv.mars.app.data.local
 
+import android.util.Log
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -16,6 +17,7 @@ import tv.mars.app.core.ContentKind
 import tv.mars.app.core.Episode
 import tv.mars.app.core.MediaContent
 import tv.mars.app.core.Programme
+import tv.mars.app.data.network.M3uBatch
 import java.util.UUID
 
 class RoomCatalogStore(private val database: MarsTvDatabase) {
@@ -58,6 +60,50 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
             dao.insertImport(CatalogImportEntity(accountId, generation, catalog.loadedAt))
         }
         deleteObsoleteRows(accountId, generation)
+    }
+
+    fun beginImport(accountId: String, loadedAt: Long = System.currentTimeMillis()): ImportSession =
+        ImportSession(accountId, UUID.randomUUID().toString(), loadedAt)
+
+    inner class ImportSession internal constructor(
+        private val accountId: String,
+        private val generation: String,
+        private val loadedAt: Long,
+    ) {
+        private var finished = false
+
+        suspend fun write(batch: M3uBatch) {
+            check(!finished) { "Catalog import session is already finished" }
+            require(batch.rowCount <= IMPORT_BATCH_SIZE) { "Catalog import batch exceeds $IMPORT_BATCH_SIZE rows" }
+            currentCoroutineContext().ensureActive()
+            database.withTransaction {
+                if (batch.categories.isNotEmpty()) {
+                    dao.insertCategories(batch.categories.map { it.toEntity(accountId, generation) })
+                }
+                val items = batch.channels.map { it.toEntity(generation) } + batch.media.map { it.toEntity(generation) }
+                if (items.isNotEmpty()) dao.insertItems(items)
+                if (batch.episodes.isNotEmpty()) {
+                    dao.insertEpisodes(batch.episodes.map { it.episode.toEntity(generation, it.seriesId) })
+                }
+            }
+        }
+
+        suspend fun commit() {
+            check(!finished) { "Catalog import session is already finished" }
+            currentCoroutineContext().ensureActive()
+            database.withTransaction {
+                dao.insertImport(CatalogImportEntity(accountId, generation, loadedAt))
+            }
+            finished = true
+            runCatching { deleteObsoleteRows(accountId, generation) }
+                .onFailure { Log.w(TAG, "Committed catalog but could not remove an obsolete generation", it) }
+        }
+
+        suspend fun discard() {
+            if (finished) return
+            deleteGeneration(accountId, generation)
+            finished = true
+        }
     }
 
     fun observeCategories(accountId: String, kind: ContentKind): Flow<List<Category>> =
@@ -129,6 +175,25 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         )
     }
 
+    private suspend fun deleteGeneration(accountId: String, generation: String) {
+        deleteBatches(
+            load = { dao.programmesInGeneration(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteProgrammes,
+        )
+        deleteBatches(
+            load = { dao.episodesInGeneration(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteEpisodes,
+        )
+        deleteBatches(
+            load = { dao.itemsInGeneration(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteItems,
+        )
+        deleteBatches(
+            load = { dao.categoriesInGeneration(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteCategories,
+        )
+    }
+
     private suspend fun <T> deleteBatches(
         load: suspend () -> List<T>,
         delete: suspend (List<T>) -> Unit,
@@ -149,6 +214,7 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     )
 
     companion object {
+        private const val TAG = "RoomCatalogStore"
         internal const val IMPORT_BATCH_SIZE = 500
         internal const val INITIAL_LOAD_SIZE = 100
         internal const val PAGE_SIZE = 50

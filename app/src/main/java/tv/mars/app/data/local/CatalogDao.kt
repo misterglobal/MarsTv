@@ -89,6 +89,18 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
     suspend fun obsoleteProgrammes(accountId: String, activeGeneration: String, limit: Int): List<CatalogProgrammeEntity>
 
+    @Query("SELECT * FROM catalog_categories WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
+    suspend fun categoriesInGeneration(accountId: String, generation: String, limit: Int): List<CatalogCategoryEntity>
+
+    @Query("SELECT * FROM catalog_items WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
+    suspend fun itemsInGeneration(accountId: String, generation: String, limit: Int): List<CatalogItemEntity>
+
+    @Query("SELECT * FROM catalog_episodes WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
+    suspend fun episodesInGeneration(accountId: String, generation: String, limit: Int): List<CatalogEpisodeEntity>
+
+    @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
+    suspend fun programmesInGeneration(accountId: String, generation: String, limit: Int): List<CatalogProgrammeEntity>
+
     @Delete suspend fun deleteCategories(values: List<CatalogCategoryEntity>)
     @Delete suspend fun deleteItems(values: List<CatalogItemEntity>)
     @Delete suspend fun deleteEpisodes(values: List<CatalogEpisodeEntity>)
