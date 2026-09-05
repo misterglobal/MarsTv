@@ -50,9 +50,7 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
             dao::insertEpisodes,
         )
         writeBatches(
-            catalog.programmesByEpgId.asSequence().flatMap { (_, programmes) ->
-                programmes.asSequence().map { it.toEntity(accountId, generation) }
-            },
+            catalog.programmesByEpgId.retainedProgrammeEntities(accountId, generation),
             dao::insertProgrammes,
         )
 
@@ -112,9 +110,16 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     fun observeCategories(accountId: String, kind: ContentKind): Flow<List<Category>> =
         dao.observeCategories(accountId, kind.name).map { values -> values.map(CatalogCategoryEntity::toModel) }
 
-    fun pagedChannels(accountId: String, categoryKey: String? = null): Flow<PagingData<Channel>> = Pager(
+    fun pagedChannels(
+        accountId: String,
+        categoryKey: String? = null,
+        blockedCategoryKeys: Set<String> = emptySet(),
+    ): Flow<PagingData<Channel>> = Pager(
         config = pagingConfig(),
-        pagingSourceFactory = { dao.pagingItems(accountId, ContentKind.LIVE.name, categoryKey) },
+        pagingSourceFactory = {
+            if (blockedCategoryKeys.isEmpty()) dao.pagingItems(accountId, ContentKind.LIVE.name, categoryKey)
+            else dao.pagingItemsExcluding(accountId, ContentKind.LIVE.name, categoryKey, blockedCategoryKeys.toList())
+        },
     ).flow.map { page -> page.map(CatalogItemEntity::toChannel) }
 
     fun pagedMedia(
@@ -170,18 +175,30 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     suspend fun episodes(accountId: String, seriesId: String): List<Episode> =
         dao.episodes(accountId, seriesId).map(CatalogEpisodeEntity::toModel)
 
-    suspend fun programmes(
+    fun programmes(
         accountId: String,
         channelEpgId: String,
         windowStart: Long,
         windowEnd: Long,
-    ): List<Programme> = dao.programmes(
+    ): Flow<List<Programme>> = dao.programmes(
         accountId = accountId,
         channelEpgId = channelEpgId,
         windowStart = windowStart,
         windowEnd = windowEnd,
         limit = MAX_PROGRAMMES_PER_WINDOW,
-    ).map(CatalogProgrammeEntity::toModel)
+    ).map { values -> values.map(CatalogProgrammeEntity::toModel) }
+
+    suspend fun replaceProgrammes(accountId: String, programmesByEpgId: Map<String, List<Programme>>) {
+        val generation = dao.activeGeneration(accountId) ?: return
+        deleteBatches(
+            load = { dao.activeProgrammes(accountId, generation, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteProgrammes,
+        )
+        writeBatches(
+            programmesByEpgId.retainedProgrammeEntities(accountId, generation),
+            dao::insertProgrammes,
+        )
+    }
 
     suspend fun clearAccount(accountId: String) {
         deleteBatches(
@@ -273,9 +290,25 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         internal const val PAGE_SIZE = 50
         internal const val MAX_PAGING_CACHE_SIZE = 300
         private const val MAX_PROGRAMMES_PER_WINDOW = 50
+        internal const val PAST_EPG_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
+        internal const val FUTURE_EPG_RETENTION_MS = 14L * 24 * 60 * 60 * 1000
         private const val SEARCH_CHANNEL_LIMIT = 30
         private const val SEARCH_MEDIA_LIMIT = 60
         private const val MAX_FAVOURITE_KEYS = 500
+    }
+}
+
+private fun Map<String, List<Programme>>.retainedProgrammeEntities(
+    accountId: String,
+    generation: String,
+): Sequence<CatalogProgrammeEntity> {
+    val now = System.currentTimeMillis()
+    val earliestEnd = now - RoomCatalogStore.PAST_EPG_RETENTION_MS
+    val latestStart = now + RoomCatalogStore.FUTURE_EPG_RETENTION_MS
+    return asSequence().flatMap { (_, programmes) ->
+        programmes.asSequence()
+            .filter { it.endMs >= earliestEnd && it.startMs <= latestStart }
+            .map { it.toEntity(accountId, generation) }
     }
 }
 

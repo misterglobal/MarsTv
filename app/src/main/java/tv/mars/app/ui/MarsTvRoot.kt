@@ -213,7 +213,11 @@ private fun DestinationContent(
     val blockedCategoryKeys = state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
     when (state.destination) {
         MainDestination.LIVE -> LiveGuideScreen(
-            catalog = state.catalog,
+            accountId = accountId,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.LIVE) },
+            channelsSource = { categoryKey, blocked -> viewModel.pagedChannels(accountId, categoryKey, blocked) },
+            programmesSource = { epgId, start, end -> viewModel.programmes(accountId, epgId, start, end) },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             profileHasPin = hasPin,
             isCategoryLocked = viewModel::isCategoryLocked,

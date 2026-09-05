@@ -13,6 +13,9 @@ interface CatalogDao {
     @Query("SELECT EXISTS(SELECT 1 FROM catalog_imports WHERE account_id = :accountId)")
     suspend fun hasActiveImport(accountId: String): Boolean
 
+    @Query("SELECT active_generation FROM catalog_imports WHERE account_id = :accountId")
+    suspend fun activeGeneration(accountId: String): String?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImport(value: CatalogImportEntity)
 
@@ -149,11 +152,18 @@ interface CatalogDao {
         ORDER BY programmes.start_ms
         LIMIT :limit""",
     )
-    suspend fun programmes(
+    fun programmes(
         accountId: String,
         channelEpgId: String,
         windowStart: Long,
         windowEnd: Long,
+        limit: Int,
+    ): Flow<List<CatalogProgrammeEntity>>
+
+    @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
+    suspend fun activeProgrammes(
+        accountId: String,
+        generation: String,
         limit: Int,
     ): List<CatalogProgrammeEntity>
 

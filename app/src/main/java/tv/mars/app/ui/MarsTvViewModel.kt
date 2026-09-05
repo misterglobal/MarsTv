@@ -237,6 +237,19 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         blockedCategoryKeys: Set<String>,
     ): Flow<PagingData<MediaContent>> = repository.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
 
+    fun pagedChannels(
+        accountId: String,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<Channel>> = repository.pagedChannels(accountId, categoryKey, blockedCategoryKeys)
+
+    fun programmes(
+        accountId: String,
+        channelEpgId: String,
+        windowStart: Long,
+        windowEnd: Long,
+    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd)
+
     suspend fun searchCatalog(
         accountId: String,
         query: String,

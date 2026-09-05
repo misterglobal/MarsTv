@@ -76,6 +76,19 @@ class IptvRepository(
         blockedCategoryKeys: Set<String>,
     ): Flow<PagingData<MediaContent>> = roomCatalog.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
 
+    fun pagedChannels(
+        accountId: String,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<Channel>> = roomCatalog.pagedChannels(accountId, categoryKey, blockedCategoryKeys)
+
+    fun programmes(
+        accountId: String,
+        channelEpgId: String,
+        windowStart: Long,
+        windowEnd: Long,
+    ): Flow<List<Programme>> = roomCatalog.programmes(accountId, channelEpgId, windowStart, windowEnd)
+
     suspend fun searchCatalog(
         accountId: String,
         query: String,
@@ -185,6 +198,7 @@ class IptvRepository(
         } else {
             emptyMap()
         }
+        roomCatalog.replaceProgrammes(account.id, programmes)
         return CatalogBundle(
             accountId = account.id,
             liveCategories = doc.liveCategories,

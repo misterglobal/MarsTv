@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +36,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,7 +52,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import tv.mars.app.core.CatalogBundle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.collectAsLazyPagingItems
 import tv.mars.app.core.Category
 import tv.mars.app.core.Channel
 import tv.mars.app.core.Programme
@@ -67,10 +72,15 @@ import tv.mars.app.ui.theme.MarsWhite
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.flow.Flow
 
 @Composable
 fun LiveGuideScreen(
-    catalog: CatalogBundle,
+    accountId: String,
+    categoriesSource: () -> Flow<List<Category>>,
+    channelsSource: (categoryKey: String?, blockedCategoryKeys: Set<String>) -> Flow<PagingData<Channel>>,
+    programmesSource: (channelEpgId: String, windowStart: Long, windowEnd: Long) -> Flow<List<Programme>>,
+    blockedCategoryKeys: Set<String>,
     favouriteKeys: Set<String>,
     profileHasPin: Boolean,
     isCategoryLocked: (String) -> Boolean,
@@ -82,17 +92,22 @@ fun LiveGuideScreen(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedCategory by remember(catalog.accountId) { mutableStateOf<String?>(null) }
+    var selectedCategory by remember(accountId) { mutableStateOf<String?>(null) }
     var pendingUnlock by remember { mutableStateOf<Category?>(null) }
     var guideOffsetMs by remember { mutableLongStateOf(0L) }
+    val categories by remember(accountId) { categoriesSource() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val channels = remember(accountId, selectedCategory, blockedCategoryKeys) {
+        channelsSource(selectedCategory, blockedCategoryKeys)
+    }.collectAsLazyPagingItems()
 
-    val channels = catalog.channels.filter {
-        !isCategoryLocked(it.categoryKey) && (selectedCategory == null || it.categoryKey == selectedCategory)
+    LaunchedEffect(categories, selectedCategory) {
+        if (selectedCategory != null && categories.none { it.key == selectedCategory }) selectedCategory = null
     }
 
     Column(modifier = modifier.fillMaxSize()) {
         GuideHeader(
-            categories = catalog.liveCategories,
+            categories = categories,
             selectedCategory = selectedCategory,
             isLocked = isCategoryLocked,
             onSelect = { category ->
@@ -104,25 +119,43 @@ fun LiveGuideScreen(
             onLater = { guideOffsetMs += 2 * 60 * 60 * 1000L },
         )
 
-        if (channels.isEmpty()) {
-            EmptyState("No live channels", "Try another category or refresh this account.")
-        } else {
+        when {
+            channels.loadState.refresh is LoadState.Loading ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            channels.loadState.refresh is LoadState.Error ->
+                EmptyState("Could not load live channels", "Refresh this account and try again.")
+            channels.itemCount == 0 ->
+                EmptyState("No live channels", "Try another category or refresh this account.")
+            else -> {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(channels, key = Channel::key) { channel ->
-                    ChannelGuideRow(
-                        channel = channel,
-                        programmes = catalog.programmesByEpgId[channel.epgId].orEmpty(),
-                        guideOffsetMs = guideOffsetMs,
-                        favourite = channel.key in favouriteKeys,
-                        onPlayChannel = { onPlayChannel(channel) },
-                        onPlayProgramme = { onPlayProgramme(channel, it) },
-                        onFavourite = { onToggleFavourite(channel.key) },
-                    )
+                items(
+                    count = channels.itemCount,
+                    key = { index -> channels.peek(index)?.key ?: "live-placeholder-$index" },
+                ) { index ->
+                    channels[index]?.let { channel ->
+                        ChannelGuideRow(
+                            channel = channel,
+                            programmesSource = programmesSource,
+                            guideOffsetMs = guideOffsetMs,
+                            favourite = channel.key in favouriteKeys,
+                            onPlayChannel = { onPlayChannel(channel) },
+                            onPlayProgramme = { onPlayProgramme(channel, it) },
+                            onFavourite = { onToggleFavourite(channel.key) },
+                        )
+                    }
+                }
+                if (channels.loadState.append is LoadState.Loading) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
                 }
                 item { Spacer(Modifier.height(28.dp)) }
+            }
             }
         }
     }
@@ -209,16 +242,19 @@ private fun CategoryChip(title: String, selected: Boolean, locked: Boolean, onCl
 @Composable
 private fun ChannelGuideRow(
     channel: Channel,
-    programmes: List<Programme>,
+    programmesSource: (channelEpgId: String, windowStart: Long, windowEnd: Long) -> Flow<List<Programme>>,
     guideOffsetMs: Long,
     favourite: Boolean,
     onPlayChannel: () -> Unit,
     onPlayProgramme: (Programme) -> Unit,
     onFavourite: () -> Unit,
 ) {
-    val windowStart = System.currentTimeMillis() + guideOffsetMs - 15 * 60 * 1000L
+    val windowStart = remember(guideOffsetMs) { System.currentTimeMillis() + guideOffsetMs - 15 * 60 * 1000L }
     val windowEnd = windowStart + 4 * 60 * 60 * 1000L
-    val visibleProgrammes = programmes.filter { it.endMs > windowStart && it.startMs < windowEnd }.take(10)
+    val programmes by remember(channel.epgId, windowStart, windowEnd) {
+        programmesSource(channel.epgId, windowStart, windowEnd)
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val visibleProgrammes = programmes.take(10)
 
     Row(modifier = Modifier.fillMaxWidth().height(104.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         FocusSurface(onClick = onPlayChannel, modifier = Modifier.width(218.dp).fillMaxHeight()) {
