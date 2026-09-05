@@ -1,0 +1,446 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "fe856ef5781598ba51f60086912994d6",
+    "entities": [
+      {
+        "tableName": "catalog_imports",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_id` TEXT NOT NULL, `active_generation` TEXT NOT NULL, `loaded_at` INTEGER NOT NULL, PRIMARY KEY(`account_id`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "account_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeGeneration",
+            "columnName": "active_generation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "loadedAt",
+            "columnName": "loaded_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "account_id"
+          ]
+        }
+      },
+      {
+        "tableName": "catalog_categories",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_id` TEXT NOT NULL, `generation` TEXT NOT NULL, `category_key` TEXT NOT NULL, `remote_id` TEXT NOT NULL, `name` TEXT NOT NULL, `kind` TEXT NOT NULL, PRIMARY KEY(`account_id`, `generation`, `category_key`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "account_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryKey",
+            "columnName": "category_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remote_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "account_id",
+            "generation",
+            "category_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_catalog_categories_account_id_generation_kind_name",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "kind",
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_categories_account_id_generation_kind_name` ON `${TABLE_NAME}` (`account_id`, `generation`, `kind`, `name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "catalog_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_id` TEXT NOT NULL, `generation` TEXT NOT NULL, `item_key` TEXT NOT NULL, `remote_id` TEXT NOT NULL, `title` TEXT NOT NULL, `kind` TEXT NOT NULL, `category_key` TEXT NOT NULL, `category_name` TEXT NOT NULL, `artwork_url` TEXT NOT NULL, `backdrop_url` TEXT NOT NULL, `playback_url` TEXT NOT NULL, `description` TEXT NOT NULL, `rating` TEXT NOT NULL, `year` TEXT NOT NULL, `series_id` TEXT NOT NULL, `epg_id` TEXT NOT NULL, `supports_catch_up` INTEGER NOT NULL, `catch_up_days` INTEGER NOT NULL, `catch_up_template` TEXT NOT NULL, PRIMARY KEY(`account_id`, `generation`, `item_key`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "account_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemKey",
+            "columnName": "item_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remote_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryKey",
+            "columnName": "category_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "category_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artworkUrl",
+            "columnName": "artwork_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "backdropUrl",
+            "columnName": "backdrop_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playbackUrl",
+            "columnName": "playback_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rating",
+            "columnName": "rating",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "series_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "epgId",
+            "columnName": "epg_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "supportsCatchUp",
+            "columnName": "supports_catch_up",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "catchUpDays",
+            "columnName": "catch_up_days",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "catchUpTemplate",
+            "columnName": "catch_up_template",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "account_id",
+            "generation",
+            "item_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_catalog_items_account_id_generation_kind_title",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "kind",
+              "title"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_items_account_id_generation_kind_title` ON `${TABLE_NAME}` (`account_id`, `generation`, `kind`, `title`)"
+          },
+          {
+            "name": "index_catalog_items_account_id_generation_kind_category_key_title",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "kind",
+              "category_key",
+              "title"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_items_account_id_generation_kind_category_key_title` ON `${TABLE_NAME}` (`account_id`, `generation`, `kind`, `category_key`, `title`)"
+          },
+          {
+            "name": "index_catalog_items_account_id_generation_epg_id",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "epg_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_items_account_id_generation_epg_id` ON `${TABLE_NAME}` (`account_id`, `generation`, `epg_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "catalog_episodes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_id` TEXT NOT NULL, `generation` TEXT NOT NULL, `episode_key` TEXT NOT NULL, `series_id` TEXT NOT NULL, `remote_id` TEXT NOT NULL, `title` TEXT NOT NULL, `season_number` INTEGER NOT NULL, `episode_number` INTEGER NOT NULL, `playback_url` TEXT NOT NULL, `artwork_url` TEXT NOT NULL, `description` TEXT NOT NULL, `duration_text` TEXT NOT NULL, PRIMARY KEY(`account_id`, `generation`, `episode_key`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "account_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "episodeKey",
+            "columnName": "episode_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seriesId",
+            "columnName": "series_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remote_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seasonNumber",
+            "columnName": "season_number",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "episodeNumber",
+            "columnName": "episode_number",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "playbackUrl",
+            "columnName": "playback_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artworkUrl",
+            "columnName": "artwork_url",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "durationText",
+            "columnName": "duration_text",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "account_id",
+            "generation",
+            "episode_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_catalog_episodes_account_id_generation_series_id_season_number_episode_number",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "series_id",
+              "season_number",
+              "episode_number"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_episodes_account_id_generation_series_id_season_number_episode_number` ON `${TABLE_NAME}` (`account_id`, `generation`, `series_id`, `season_number`, `episode_number`)"
+          }
+        ]
+      },
+      {
+        "tableName": "catalog_programmes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`account_id` TEXT NOT NULL, `generation` TEXT NOT NULL, `channel_epg_id` TEXT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `start_ms` INTEGER NOT NULL, `end_ms` INTEGER NOT NULL, PRIMARY KEY(`account_id`, `generation`, `channel_epg_id`, `start_ms`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "account_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "channelEpgId",
+            "columnName": "channel_epg_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startMs",
+            "columnName": "start_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endMs",
+            "columnName": "end_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "account_id",
+            "generation",
+            "channel_epg_id",
+            "start_ms"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_catalog_programmes_account_id_generation_channel_epg_id_end_ms_start_ms",
+            "unique": false,
+            "columnNames": [
+              "account_id",
+              "generation",
+              "channel_epg_id",
+              "end_ms",
+              "start_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_catalog_programmes_account_id_generation_channel_epg_id_end_ms_start_ms` ON `${TABLE_NAME}` (`account_id`, `generation`, `channel_epg_id`, `end_ms`, `start_ms`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'fe856ef5781598ba51f60086912994d6')"
+    ]
+  }
+}

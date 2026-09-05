@@ -1,0 +1,111 @@
+package tv.mars.app.data.local
+
+import androidx.paging.PagingSource
+import androidx.room.Dao
+import androidx.room.Delete
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface CatalogDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertImport(value: CatalogImportEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCategories(values: List<CatalogCategoryEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertItems(values: List<CatalogItemEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEpisodes(values: List<CatalogEpisodeEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertProgrammes(values: List<CatalogProgrammeEntity>)
+
+    @Query(
+        """SELECT categories.* FROM catalog_categories AS categories
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = categories.account_id
+         AND imports.active_generation = categories.generation
+        WHERE categories.account_id = :accountId AND categories.kind = :kind
+        ORDER BY categories.name COLLATE NOCASE, categories.category_key""",
+    )
+    fun observeCategories(accountId: String, kind: String): Flow<List<CatalogCategoryEntity>>
+
+    @Query(
+        """SELECT items.* FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId
+          AND items.kind = :kind
+          AND (:categoryKey IS NULL OR items.category_key = :categoryKey)
+        ORDER BY items.title COLLATE NOCASE, items.item_key""",
+    )
+    fun pagingItems(accountId: String, kind: String, categoryKey: String?): PagingSource<Int, CatalogItemEntity>
+
+    @Query(
+        """SELECT episodes.* FROM catalog_episodes AS episodes
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = episodes.account_id
+         AND imports.active_generation = episodes.generation
+        WHERE episodes.account_id = :accountId AND episodes.series_id = :seriesId
+        ORDER BY episodes.season_number, episodes.episode_number, episodes.title COLLATE NOCASE""",
+    )
+    suspend fun episodes(accountId: String, seriesId: String): List<CatalogEpisodeEntity>
+
+    @Query(
+        """SELECT programmes.* FROM catalog_programmes AS programmes
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = programmes.account_id
+         AND imports.active_generation = programmes.generation
+        WHERE programmes.account_id = :accountId
+          AND programmes.channel_epg_id = :channelEpgId
+          AND programmes.end_ms > :windowStart
+          AND programmes.start_ms < :windowEnd
+        ORDER BY programmes.start_ms
+        LIMIT :limit""",
+    )
+    suspend fun programmes(
+        accountId: String,
+        channelEpgId: String,
+        windowStart: Long,
+        windowEnd: Long,
+        limit: Int,
+    ): List<CatalogProgrammeEntity>
+
+    @Query("SELECT * FROM catalog_categories WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
+    suspend fun obsoleteCategories(accountId: String, activeGeneration: String, limit: Int): List<CatalogCategoryEntity>
+
+    @Query("SELECT * FROM catalog_items WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
+    suspend fun obsoleteItems(accountId: String, activeGeneration: String, limit: Int): List<CatalogItemEntity>
+
+    @Query("SELECT * FROM catalog_episodes WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
+    suspend fun obsoleteEpisodes(accountId: String, activeGeneration: String, limit: Int): List<CatalogEpisodeEntity>
+
+    @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
+    suspend fun obsoleteProgrammes(accountId: String, activeGeneration: String, limit: Int): List<CatalogProgrammeEntity>
+
+    @Delete suspend fun deleteCategories(values: List<CatalogCategoryEntity>)
+    @Delete suspend fun deleteItems(values: List<CatalogItemEntity>)
+    @Delete suspend fun deleteEpisodes(values: List<CatalogEpisodeEntity>)
+    @Delete suspend fun deleteProgrammes(values: List<CatalogProgrammeEntity>)
+
+    @Query("DELETE FROM catalog_imports WHERE account_id = :accountId")
+    suspend fun deleteImport(accountId: String)
+
+    @Query("DELETE FROM catalog_categories WHERE account_id = :accountId")
+    suspend fun deleteAllCategories(accountId: String)
+
+    @Query("DELETE FROM catalog_items WHERE account_id = :accountId")
+    suspend fun deleteAllItems(accountId: String)
+
+    @Query("DELETE FROM catalog_episodes WHERE account_id = :accountId")
+    suspend fun deleteAllEpisodes(accountId: String)
+
+    @Query("DELETE FROM catalog_programmes WHERE account_id = :accountId")
+    suspend fun deleteAllProgrammes(accountId: String)
+}
