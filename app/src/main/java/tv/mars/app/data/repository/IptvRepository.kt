@@ -2,6 +2,8 @@ package tv.mars.app.data.repository
 
 import android.net.Uri
 import android.util.Log
+import androidx.paging.PagingData
+import kotlinx.coroutines.flow.Flow
 import tv.mars.app.core.CatalogBundle
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
@@ -16,15 +18,16 @@ import tv.mars.app.data.network.M3uParser
 import tv.mars.app.data.network.NetworkClient
 import tv.mars.app.data.network.XmlTvParser
 import tv.mars.app.data.network.XtreamClient
+import tv.mars.app.data.local.RoomCatalogStore
 import java.net.URI
 import java.net.URLDecoder
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.ConcurrentHashMap
 
 class IptvRepository(
-    private val persistence: tv.mars.app.data.local.CatalogPersistence
+    private val persistence: tv.mars.app.data.local.CatalogPersistence,
+    private val roomCatalog: RoomCatalogStore,
 ) {
     private companion object {
         const val TAG = "IptvRepository"
@@ -34,15 +37,11 @@ class IptvRepository(
     private val xmlTv = XmlTvParser()
     private val m3u = M3uParser()
     private val xtream = XtreamClient(network, xmlTv)
-
-    // We use a limited cache for M3U series episodes to prevent OOM on massive playlists.
-    // The key is accountId, then seriesId -> List<Episode>.
-    private val m3uSeriesCache = ConcurrentHashMap<String, Map<String, List<tv.mars.app.core.Episode>>>()
+    private val m3uRoomImporter = M3uRoomImporter(m3u, roomCatalog)
 
     suspend fun loadCatalog(account: IptvAccount): CatalogBundle = when (account.sourceType) {
         SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> {
-            clearCache(account.id) // Clear M3U cache if we switch to Xtream
-            xtream.loadCatalog(account)
+            xtream.loadCatalog(account).also { roomCatalog.replaceCatalog(it) }
         }
         SourceType.M3U -> loadM3u(account)
     }
@@ -55,20 +54,36 @@ class IptvRepository(
                 if (xtreamAccount != null && series.seriesId.startsWith("m3u-").not()) {
                     xtream.loadSeriesDetails(xtreamAccount, series)
                 } else {
-                    val accountEpisodes = m3uSeriesCache[account.id]
-                        ?: persistence.loadEpisodes(account.id)?.also { m3uSeriesCache[account.id] = it }
-                    val episodes = accountEpisodes?.get(series.seriesId)
-                    SeriesDetails(series, episodes?.groupBy { it.seasonNumber }.orEmpty())
+                    SeriesDetails(series, roomCatalog.episodes(account.id, series.seriesId).groupBy { it.seasonNumber })
                 }
             }
         }
 
-    fun clearCache(accountId: String) {
-        m3uSeriesCache.remove(accountId)
-    }
+    fun clearCache(accountId: String) = Unit
 
     fun clearAllCaches() {
-        m3uSeriesCache.clear()
+        // Paging owns bounded UI caches; there is no repository catalog cache.
+    }
+
+    fun observeCategories(accountId: String, kind: ContentKind): Flow<List<tv.mars.app.core.Category>> =
+        roomCatalog.observeCategories(accountId, kind)
+
+    fun pagedMedia(
+        accountId: String,
+        kind: ContentKind,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<MediaContent>> = roomCatalog.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
+
+    suspend fun seedRoomFromLegacyCache(catalog: CatalogBundle) {
+        if (roomCatalog.hasCatalog(catalog.accountId)) return
+        val episodes = persistence.loadEpisodes(catalog.accountId).orEmpty()
+        roomCatalog.replaceCatalog(catalog, episodes)
+    }
+
+    suspend fun clearStoredCatalog(accountId: String) {
+        roomCatalog.clearAccount(accountId)
+        persistence.clear(accountId)
     }
 
     fun liveRequest(channel: Channel): PlayerRequest = PlayerRequest(
@@ -119,7 +134,6 @@ class IptvRepository(
 
     private suspend fun loadM3u(account: IptvAccount): CatalogBundle {
         // A refresh must not retain the previous episode graph while a new one is built.
-        m3uSeriesCache.remove(account.id)
         account.xtreamAccountFromM3u()?.let { xtreamAccount ->
             val xtreamResult = runCatching { xtream.loadCatalog(xtreamAccount) }
             if (xtreamResult.isSuccess) {
@@ -129,6 +143,7 @@ class IptvRepository(
                     "Xtream catalog: Live: ${catalog.channels.size}; " +
                         "Movies: ${catalog.movies.size}; Series: ${catalog.series.size}",
                 )
+                roomCatalog.replaceCatalog(catalog)
                 return catalog
             }
             Log.w(TAG, "Xtream discovery failed; using M3U classification fallback")
@@ -136,7 +151,7 @@ class IptvRepository(
 
         var parsed: M3uDocument? = null
         network.getStream(account.m3uUrl) { stream ->
-            parsed = m3u.parse(account, stream)
+            parsed = m3uRoomImporter.importWithCompatibilityDocument(account, stream)
         }
         val doc = parsed ?: error("Failed to parse M3U playlist")
         Log.i(
@@ -145,8 +160,6 @@ class IptvRepository(
                 "Movies: ${doc.stats.movieEntries}; Series episodes: ${doc.stats.seriesEpisodes}; " +
                 "Unclassified: ${doc.stats.unclassifiedEntries}",
         )
-        persistence.saveEpisodes(account.id, doc.episodesBySeriesId)
-        m3uSeriesCache[account.id] = doc.episodesBySeriesId
         val programmes = if (doc.epgUrl.isNotBlank()) {
             runCatching {
                 val resolvedEpg = resolve(account.m3uUrl, doc.epgUrl)

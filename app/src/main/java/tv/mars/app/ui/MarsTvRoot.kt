@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tv.mars.app.core.MainDestination
+import tv.mars.app.core.ContentKind
 import tv.mars.app.core.OverlayScreen
 import tv.mars.app.ui.components.ErrorBanner
 import tv.mars.app.ui.components.FocusSurface
@@ -208,6 +209,8 @@ private fun DestinationContent(
 ) {
     val hasPin = !state.activeProfile?.pinHash.isNullOrBlank()
     val openSettings = { viewModel.setDestination(MainDestination.SETTINGS) }
+    val accountId = state.activeAccount?.id.orEmpty()
+    val blockedCategoryKeys = state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
     when (state.destination) {
         MainDestination.LIVE -> LiveGuideScreen(
             catalog = state.catalog,
@@ -223,10 +226,14 @@ private fun DestinationContent(
             modifier = modifier,
         )
         MainDestination.MOVIES -> MediaCatalogScreen(
+            accountId = accountId,
             title = "Movies",
             subtitle = "On-demand titles from ${state.activeAccount?.name.orEmpty()}",
-            categories = state.catalog.movieCategories,
-            content = state.catalog.movies,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.MOVIE) },
+            contentSource = { categoryKey, blocked ->
+                viewModel.pagedMedia(accountId, ContentKind.MOVIE, categoryKey, blocked)
+            },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             isTelevision = isTelevision,
             profileHasPin = hasPin,
@@ -239,10 +246,14 @@ private fun DestinationContent(
             modifier = modifier,
         )
         MainDestination.SERIES -> MediaCatalogScreen(
+            accountId = accountId,
             title = "Series",
             subtitle = "Browse shows and episodes",
-            categories = state.catalog.seriesCategories,
-            content = state.catalog.series,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.SERIES) },
+            contentSource = { categoryKey, blocked ->
+                viewModel.pagedMedia(accountId, ContentKind.SERIES, categoryKey, blocked)
+            },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             isTelevision = isTelevision,
             profileHasPin = hasPin,

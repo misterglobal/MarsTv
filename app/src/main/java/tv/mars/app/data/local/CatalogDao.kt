@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CatalogDao {
+    @Query("SELECT EXISTS(SELECT 1 FROM catalog_imports WHERE account_id = :accountId)")
+    suspend fun hasActiveImport(accountId: String): Boolean
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImport(value: CatalogImportEntity)
 
@@ -46,6 +49,24 @@ interface CatalogDao {
         ORDER BY items.title COLLATE NOCASE, items.item_key""",
     )
     fun pagingItems(accountId: String, kind: String, categoryKey: String?): PagingSource<Int, CatalogItemEntity>
+
+    @Query(
+        """SELECT items.* FROM catalog_items AS items
+        INNER JOIN catalog_imports AS imports
+          ON imports.account_id = items.account_id
+         AND imports.active_generation = items.generation
+        WHERE items.account_id = :accountId
+          AND items.kind = :kind
+          AND (:categoryKey IS NULL OR items.category_key = :categoryKey)
+          AND items.category_key NOT IN (:blockedCategoryKeys)
+        ORDER BY items.title COLLATE NOCASE, items.item_key""",
+    )
+    fun pagingItemsExcluding(
+        accountId: String,
+        kind: String,
+        categoryKey: String?,
+        blockedCategoryKeys: List<String>,
+    ): PagingSource<Int, CatalogItemEntity>
 
     @Query(
         """SELECT episodes.* FROM catalog_episodes AS episodes
@@ -101,6 +122,18 @@ interface CatalogDao {
     @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
     suspend fun programmesInGeneration(accountId: String, generation: String, limit: Int): List<CatalogProgrammeEntity>
 
+    @Query("SELECT * FROM catalog_categories WHERE account_id = :accountId LIMIT :limit")
+    suspend fun categoriesForAccount(accountId: String, limit: Int): List<CatalogCategoryEntity>
+
+    @Query("SELECT * FROM catalog_items WHERE account_id = :accountId LIMIT :limit")
+    suspend fun itemsForAccount(accountId: String, limit: Int): List<CatalogItemEntity>
+
+    @Query("SELECT * FROM catalog_episodes WHERE account_id = :accountId LIMIT :limit")
+    suspend fun episodesForAccount(accountId: String, limit: Int): List<CatalogEpisodeEntity>
+
+    @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId LIMIT :limit")
+    suspend fun programmesForAccount(accountId: String, limit: Int): List<CatalogProgrammeEntity>
+
     @Delete suspend fun deleteCategories(values: List<CatalogCategoryEntity>)
     @Delete suspend fun deleteItems(values: List<CatalogItemEntity>)
     @Delete suspend fun deleteEpisodes(values: List<CatalogEpisodeEntity>)
@@ -109,15 +142,4 @@ interface CatalogDao {
     @Query("DELETE FROM catalog_imports WHERE account_id = :accountId")
     suspend fun deleteImport(accountId: String)
 
-    @Query("DELETE FROM catalog_categories WHERE account_id = :accountId")
-    suspend fun deleteAllCategories(accountId: String)
-
-    @Query("DELETE FROM catalog_items WHERE account_id = :accountId")
-    suspend fun deleteAllItems(accountId: String)
-
-    @Query("DELETE FROM catalog_episodes WHERE account_id = :accountId")
-    suspend fun deleteAllEpisodes(accountId: String)
-
-    @Query("DELETE FROM catalog_programmes WHERE account_id = :accountId")
-    suspend fun deleteAllProgrammes(accountId: String)
 }

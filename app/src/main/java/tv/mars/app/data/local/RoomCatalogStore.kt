@@ -65,6 +65,8 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     fun beginImport(accountId: String, loadedAt: Long = System.currentTimeMillis()): ImportSession =
         ImportSession(accountId, UUID.randomUUID().toString(), loadedAt)
 
+    suspend fun hasCatalog(accountId: String): Boolean = dao.hasActiveImport(accountId)
+
     inner class ImportSession internal constructor(
         private val accountId: String,
         private val generation: String,
@@ -118,11 +120,15 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         accountId: String,
         kind: ContentKind,
         categoryKey: String? = null,
+        blockedCategoryKeys: Set<String> = emptySet(),
     ): Flow<PagingData<MediaContent>> {
         require(kind == ContentKind.MOVIE || kind == ContentKind.SERIES)
         return Pager(
             config = pagingConfig(),
-            pagingSourceFactory = { dao.pagingItems(accountId, kind.name, categoryKey) },
+            pagingSourceFactory = {
+                if (blockedCategoryKeys.isEmpty()) dao.pagingItems(accountId, kind.name, categoryKey)
+                else dao.pagingItemsExcluding(accountId, kind.name, categoryKey, blockedCategoryKeys.toList())
+            },
         ).flow.map { page -> page.map(CatalogItemEntity::toMedia) }
     }
 
@@ -142,12 +148,24 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         limit = MAX_PROGRAMMES_PER_WINDOW,
     ).map(CatalogProgrammeEntity::toModel)
 
-    suspend fun clearAccount(accountId: String) = database.withTransaction {
-        dao.deleteAllProgrammes(accountId)
-        dao.deleteAllEpisodes(accountId)
-        dao.deleteAllItems(accountId)
-        dao.deleteAllCategories(accountId)
-        dao.deleteImport(accountId)
+    suspend fun clearAccount(accountId: String) {
+        deleteBatches(
+            load = { dao.programmesForAccount(accountId, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteProgrammes,
+        )
+        deleteBatches(
+            load = { dao.episodesForAccount(accountId, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteEpisodes,
+        )
+        deleteBatches(
+            load = { dao.itemsForAccount(accountId, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteItems,
+        )
+        deleteBatches(
+            load = { dao.categoriesForAccount(accountId, IMPORT_BATCH_SIZE) },
+            delete = dao::deleteCategories,
+        )
+        database.withTransaction { dao.deleteImport(accountId) }
     }
 
     private suspend fun <T> writeBatches(values: Sequence<T>, insert: suspend (List<T>) -> Unit) {

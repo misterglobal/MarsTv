@@ -3,6 +3,8 @@ package tv.mars.app.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingData
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +28,8 @@ import tv.mars.app.core.SourceType
 import tv.mars.app.core.ViewerProfile
 import tv.mars.app.core.WatchRecord
 import tv.mars.app.data.local.SecureStateStore
+import tv.mars.app.data.local.MarsTvDatabase
+import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
 import java.util.concurrent.ConcurrentHashMap
 
@@ -62,7 +66,8 @@ data class MarsUiState(
 class MarsTvViewModel(application: Application) : AndroidViewModel(application) {
     private val stateStore = SecureStateStore(application)
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
-    private val repository = IptvRepository(catalogPersistence)
+    private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
+    private val repository = IptvRepository(catalogPersistence, roomCatalog)
     private val catalogCache = ConcurrentHashMap<String, CatalogBundle>()
     private val _uiState = MutableStateFlow(MarsUiState())
     val uiState: StateFlow<MarsUiState> = _uiState.asStateFlow()
@@ -174,6 +179,12 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 if (persisted != null) {
                     val dayMs = 24 * 60 * 60 * 1000L
                     if (System.currentTimeMillis() - persisted.loadedAt < dayMs) {
+                        runCatching { repository.seedRoomFromLegacyCache(persisted) }
+                            .onFailure {
+                                _uiState.update { state ->
+                                    state.copy(errorMessage = "Refresh this account to finish updating its catalog storage")
+                                }
+                            }
                         catalogCache[account.id] = persisted
                         _uiState.update { it.copy(catalog = persisted, isLoading = false) }
                         return@launch
@@ -210,10 +221,20 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         catalogCache.remove(accountId)
         repository.clearCache(accountId)
         viewModelScope.launch {
-            catalogPersistence.clear(accountId)
+            repository.clearStoredCatalog(accountId)
             stateStore.removeAccount(accountId)
         }
     }
+
+    fun observeCategories(accountId: String, kind: ContentKind): Flow<List<tv.mars.app.core.Category>> =
+        repository.observeCategories(accountId, kind)
+
+    fun pagedMedia(
+        accountId: String,
+        kind: ContentKind,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<MediaContent>> = repository.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
 
     fun setDestination(destination: MainDestination) {
         _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }

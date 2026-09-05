@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import tv.mars.app.core.IptvAccount
 import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.network.M3uBatch
+import tv.mars.app.data.network.M3uDocument
 import tv.mars.app.data.network.M3uParser
 import tv.mars.app.data.network.M3uStreamResult
 import java.io.InputStream
@@ -31,6 +32,17 @@ class M3uRoomImporter private constructor(
         val session = sessionFactory(account.id)
         return try {
             parser.parseStreaming(account, inputStream) { session.write(it) }
+                .also { session.commit() }
+        } catch (error: Throwable) {
+            withContext(NonCancellable) { session.discard() }
+            throw error
+        }
+    }
+
+    suspend fun importWithCompatibilityDocument(account: IptvAccount, inputStream: InputStream): M3uDocument {
+        val session = sessionFactory(account.id)
+        return try {
+            parser.parse(account, inputStream) { session.write(it) }
                 .also { session.commit() }
         } catch (error: Throwable) {
             withContext(NonCancellable) { session.discard() }

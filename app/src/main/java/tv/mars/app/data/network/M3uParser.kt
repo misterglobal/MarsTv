@@ -193,13 +193,18 @@ class M3uParser {
     suspend fun parse(account: IptvAccount, text: String): M3uDocument =
         parse(account, text.byteInputStream())
 
-    suspend fun parse(account: IptvAccount, inputStream: java.io.InputStream): M3uDocument {
+    suspend fun parse(
+        account: IptvAccount,
+        inputStream: java.io.InputStream,
+        emit: suspend (M3uBatch) -> Unit = {},
+    ): M3uDocument {
         val channels = mutableListOf<Channel>()
         val movies = mutableListOf<MediaContent>()
         val seriesByKey = linkedMapOf<String, MediaContent>()
         val episodesBySeriesId = linkedMapOf<String, MutableList<Episode>>()
         val categoriesByKey = linkedMapOf<String, Category>()
         val result = parseStreaming(account, inputStream) { batch ->
+            emit(batch)
             batch.categories.forEach { categoriesByKey[it.key] = it }
             channels += batch.channels
             batch.media.forEach { media ->
