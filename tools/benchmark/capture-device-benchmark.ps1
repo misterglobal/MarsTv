@@ -21,6 +21,11 @@ function Invoke-DeviceAdb {
 $state = Invoke-DeviceAdb @('get-state')
 if (($state | Out-String).Trim() -ne 'device') { throw "Device $Serial is not ready" }
 
+$memTotal = Invoke-DeviceAdb @('shell', 'cat', '/proc/meminfo') |
+    Where-Object { $_ -match '^MemTotal:' } |
+    Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($memTotal)) { throw "Unable to read MemTotal from $Serial" }
+
 @(
     "captured_at=$(Get-Date -Format o)"
     "serial=$Serial"
@@ -29,7 +34,7 @@ if (($state | Out-String).Trim() -ne 'device') { throw "Device $Serial is not re
     "os_release=$((Invoke-DeviceAdb @('shell', 'getprop', 'ro.build.version.release') | Out-String).Trim())"
     "heap_size=$((Invoke-DeviceAdb @('shell', 'getprop', 'dalvik.vm.heapsize') | Out-String).Trim())"
     "heap_growth_limit=$((Invoke-DeviceAdb @('shell', 'getprop', 'dalvik.vm.heapgrowthlimit') | Out-String).Trim())"
-    "mem_total=$((Invoke-DeviceAdb @('shell', 'sh', '-c', 'grep MemTotal /proc/meminfo') | Out-String).Trim())"
+    "mem_total=$($memTotal.Trim())"
     "data_free=$((Invoke-DeviceAdb @('shell', 'df', '-k', '/data') | Out-String).Trim())"
 ) | Set-Content -LiteralPath $metadataPath -Encoding utf8
 
