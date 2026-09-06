@@ -29,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -255,20 +256,26 @@ fun ErrorBanner(message: String?, onDismiss: () -> Unit, modifier: Modifier = Mo
 }
 
 @Composable
-fun LoadingOverlay(visible: Boolean) {
+fun LoadingOverlay(visible: Boolean, onCancel: (() -> Unit)? = null) {
     if (!visible) return
     Box(
         modifier = Modifier.fillMaxSize().background(MarsMidnight.copy(alpha = 0.70f)),
         contentAlignment = Alignment.Center,
     ) {
         Surface(color = MarsSurfaceRaised, shape = RoundedCornerShape(18.dp)) {
-            Row(
+            Column(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MarsRed, strokeWidth = 3.dp)
-                Spacer(Modifier.width(14.dp))
-                Text("Loading your lineup…", color = MarsWhite)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MarsRed, strokeWidth = 3.dp)
+                    Spacer(Modifier.width(14.dp))
+                    Text("Loading your lineup…", color = MarsWhite)
+                }
+                if (onCancel != null) {
+                    Spacer(Modifier.height(10.dp))
+                    TextButton(onClick = onCancel) { Text("Cancel import") }
+                }
             }
         }
     }

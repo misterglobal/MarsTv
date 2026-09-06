@@ -105,6 +105,7 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
                     errorMessage = state.errorMessage,
                     onClearError = viewModel::clearError,
                     onConnect = viewModel::connectAccount,
+                    onCancelImport = viewModel::cancelCatalogLoad,
                     onCancel = if (state.local.accounts.isEmpty()) null else viewModel::dismissOverlay,
                 )
             }
@@ -113,7 +114,10 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
             }
         }
 
-        LoadingOverlay(visible = state.isLoading && state.overlay != OverlayScreen.PLAYER)
+        LoadingOverlay(
+            visible = state.isLoading && state.overlay != OverlayScreen.PLAYER,
+            onCancel = (viewModel::cancelCatalogLoad).takeIf { state.isCatalogLoading },
+        )
     }
 }
 

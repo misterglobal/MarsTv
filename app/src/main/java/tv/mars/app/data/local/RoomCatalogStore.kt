@@ -8,6 +8,8 @@ import androidx.paging.map
 import androidx.room.withTransaction
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import tv.mars.app.core.CatalogBundle
@@ -31,35 +33,45 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     ) {
         val generation = UUID.randomUUID().toString()
         val accountId = catalog.accountId
+        var activated = false
+        try {
+            writeBatches(
+                sequenceOf(catalog.liveCategories, catalog.movieCategories, catalog.seriesCategories)
+                    .flatMap { it.asSequence() }
+                    .map { it.toEntity(accountId, generation) },
+                dao::insertCategories,
+            )
+            writeBatches(
+                catalog.channels.asSequence().map { it.toEntity(generation) } +
+                    catalog.movies.asSequence().map { it.toEntity(generation) } +
+                    catalog.series.asSequence().map { it.toEntity(generation) },
+                dao::insertItems,
+            )
+            writeBatches(
+                episodesBySeriesId.asSequence().flatMap { (seriesId, episodes) ->
+                    episodes.asSequence().map { it.toEntity(generation, seriesId) }
+                },
+                dao::insertEpisodes,
+            )
+            writeBatches(
+                catalog.programmesByEpgId.retainedProgrammeEntities(accountId, generation),
+                dao::insertProgrammes,
+            )
 
-        writeBatches(
-            sequenceOf(catalog.liveCategories, catalog.movieCategories, catalog.seriesCategories)
-                .flatMap { it.asSequence() }
-                .map { it.toEntity(accountId, generation) },
-            dao::insertCategories,
-        )
-        writeBatches(
-            catalog.channels.asSequence().map { it.toEntity(generation) } +
-                catalog.movies.asSequence().map { it.toEntity(generation) } +
-                catalog.series.asSequence().map { it.toEntity(generation) },
-            dao::insertItems,
-        )
-        writeBatches(
-            episodesBySeriesId.asSequence().flatMap { (seriesId, episodes) ->
-                episodes.asSequence().map { it.toEntity(generation, seriesId) }
-            },
-            dao::insertEpisodes,
-        )
-        writeBatches(
-            catalog.programmesByEpgId.retainedProgrammeEntities(accountId, generation),
-            dao::insertProgrammes,
-        )
-
-        currentCoroutineContext().ensureActive()
-        database.withTransaction {
-            dao.insertImport(CatalogImportEntity(accountId, generation, catalog.loadedAt))
+            currentCoroutineContext().ensureActive()
+            database.withTransaction {
+                dao.insertImport(CatalogImportEntity(accountId, generation, catalog.loadedAt))
+            }
+            activated = true
+            runCatching { deleteObsoleteRows(accountId, generation) }
+                .onFailure { Log.w(TAG, "Committed catalog but could not remove an obsolete generation", it) }
+        } catch (error: Throwable) {
+            if (!activated) withContext(NonCancellable) {
+                runCatching { deleteGeneration(accountId, generation) }
+                    .onFailure { Log.w(TAG, "Could not remove an uncommitted catalog generation", it) }
+            }
+            throw error
         }
-        deleteObsoleteRows(accountId, generation)
     }
 
     fun beginImport(accountId: String, loadedAt: Long = System.currentTimeMillis()): ImportSession =

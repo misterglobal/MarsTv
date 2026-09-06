@@ -1,9 +1,13 @@
 package tv.mars.app.ui
 
 import android.app.Application
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +45,7 @@ data class MarsUiState(
     val selectedSeries: SeriesDetails? = null,
     val playerRequest: PlayerRequest? = null,
     val isLoading: Boolean = false,
+    val isCatalogLoading: Boolean = false,
     val isConnecting: Boolean = false,
     val hasLoadedState: Boolean = false,
     val errorMessage: String? = null,
@@ -68,6 +73,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
+    private var catalogJob: Job? = null
+    private var catalogStartedAtElapsedMs = 0L
     private val _uiState = MutableStateFlow(MarsUiState())
     val uiState: StateFlow<MarsUiState> = _uiState.asStateFlow()
 
@@ -105,7 +112,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         m3uUrl: String,
     ) {
         if (_uiState.value.isConnecting) return
-        viewModelScope.launch {
+        catalogJob?.cancel()
+        catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
+        catalogJob = viewModelScope.launch {
             _uiState.update { it.copy(isConnecting = true, errorMessage = null) }
             val resolvedServer = if (sourceType == SourceType.PRIVATE_XTREAM) {
                 BuildConfig.PRIVATE_PORTAL_URL
@@ -129,6 +139,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
             runCatching { repository.refreshCatalog(account) }
                 .onSuccess { revision ->
+                    logCatalogCompleted()
                     _uiState.update {
                         it.copy(
                             loadedCatalogAccountId = account.id,
@@ -141,6 +152,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     stateStore.addAccount(account)
                 }
                 .onFailure { error ->
+                    if (error is CancellationException) return@onFailure
                     _uiState.update {
                         it.copy(
                             isConnecting = false,
@@ -154,8 +166,13 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     fun loadActiveAccount(force: Boolean = false) {
         val account = _uiState.value.activeAccount ?: return
         if (!force && _uiState.value.loadedCatalogAccountId == account.id) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null, selectedSeries = null) }
+        catalogJob?.cancel()
+        catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        Log.i(BENCHMARK_TAG, "catalog_start mode=${if (force) "refresh" else "load"} source=${account.sourceType}")
+        catalogJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null, selectedSeries = null)
+            }
             
             if (!force) {
                 val dayMs = 24 * 60 * 60 * 1000L
@@ -166,6 +183,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                             loadedCatalogAccountId = account.id,
                             catalogRevision = roomLoadedAt,
                             isLoading = false,
+                            isCatalogLoading = false,
                         )
                     }
                     return@launch
@@ -186,6 +204,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                                         loadedCatalogAccountId = account.id,
                                         catalogRevision = persisted.loadedAt,
                                         isLoading = false,
+                                        isCatalogLoading = false,
                                     )
                                 }
                                 return@launch
@@ -194,28 +213,54 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            _uiState.update { it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null) }
 
             runCatching { repository.refreshCatalog(account) }
                 .onSuccess { revision ->
+                    logCatalogCompleted()
                     catalogPersistence.clear(account.id)
                     _uiState.update {
                         it.copy(
                             loadedCatalogAccountId = account.id,
                             catalogRevision = revision,
                             isLoading = false,
+                            isCatalogLoading = false,
                         )
                     }
                 }
                 .onFailure { error ->
+                    if (error is CancellationException) return@onFailure
                     _uiState.update {
                         it.copy(
                             isLoading = false,
+                            isCatalogLoading = false,
                             errorMessage = error.message?.take(240) ?: "Could not refresh this account",
                         )
                     }
                 }
         }
+    }
+
+    fun cancelCatalogLoad() {
+        val activeJob = catalogJob?.takeIf { it.isActive } ?: return
+        val cancelRequestedAt = SystemClock.elapsedRealtime()
+        Log.i(BENCHMARK_TAG, "catalog_cancel_requested elapsedMs=${cancelRequestedAt - catalogStartedAtElapsedMs}")
+        activeJob.invokeOnCompletion {
+            Log.i(BENCHMARK_TAG, "catalog_cancel_stopped cancelLatencyMs=${SystemClock.elapsedRealtime() - cancelRequestedAt}")
+        }
+        activeJob.cancel(CancellationException("Catalog import cancelled by user"))
+        _uiState.update {
+            it.copy(
+                isConnecting = false,
+                isLoading = false,
+                isCatalogLoading = false,
+                errorMessage = "Catalog import cancelled",
+            )
+        }
+    }
+
+    private fun logCatalogCompleted() {
+        Log.i(BENCHMARK_TAG, "catalog_complete durationMs=${SystemClock.elapsedRealtime() - catalogStartedAtElapsedMs}")
     }
 
     fun selectAccount(accountId: String) {
@@ -455,5 +500,9 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             "http://$trimmed"
         }
+    }
+
+    private companion object {
+        const val BENCHMARK_TAG = "MarsCatalogMetrics"
     }
 }
