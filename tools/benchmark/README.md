@@ -1,5 +1,7 @@
 # MarsTV 100k device benchmark
 
+The initial Pro launch baseline is an Android TV device or emulator with approximately 2 GB RAM. The former 1 GB Fire TV Stick Lite requirement is waived; the 100,000-entry workload and all timing, memory, cancellation, and `largeHeap` criteria still apply.
+
 This workflow collects the evidence required by Section 7 of the MarsTV Pro PRD. Passing on a desktop JVM does not replace the physical-device run.
 
 ## Prepare the fixture
@@ -19,7 +21,7 @@ Install a signed, minified release APK. Clear app data before each cold run, the
 
 ```powershell
 adb -s <serial> shell pm clear tv.mars.app
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\benchmark\capture-device-benchmark.ps1 -Serial <serial> -OutputDirectory .\tools\benchmark\results\fire-tv-run-1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\benchmark\capture-device-benchmark.ps1 -Serial <serial> -OutputDirectory .\tools\benchmark\results\android-tv-2gb-run-1
 ```
 
 In MarsTV, connect the fixture account. For cancellation runs, press **Cancel import** after parsing has begun. The capture records these log markers without account identifiers or URLs:
