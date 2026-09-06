@@ -32,6 +32,24 @@ class M3uRoomImporterTest {
     }
 
     @Test
+    fun `early publication callback runs once after first committed batch`() = runBlocking {
+        val session = RecordingSession()
+        val importer = M3uRoomImporter(M3uParser(), session)
+        var callbackCount = 0
+
+        importer.import(
+            account = account,
+            inputStream = validPlaylist().byteInputStream(),
+            publishEarly = true,
+            onFirstBatchCommitted = { callbackCount++ },
+        )
+
+        assertTrue(session.batches.size > 1)
+        assertEquals(1, callbackCount)
+        assertTrue(session.committed)
+    }
+
+    @Test
     fun `parse failure discards staging without commit`() = runBlocking {
         val session = RecordingSession()
         val importer = M3uRoomImporter(M3uParser(), session)

@@ -11,12 +11,12 @@ import java.io.InputStream
 
 class M3uRoomImporter private constructor(
     private val parser: M3uParser,
-    private val sessionFactory: (String) -> StagedM3uImport,
+    private val sessionFactory: (String, Boolean) -> StagedM3uImport,
 ) {
     constructor(parser: M3uParser, store: RoomCatalogStore) : this(
         parser = parser,
-        sessionFactory = { accountId ->
-            val session = store.beginImport(accountId)
+        sessionFactory = { accountId, publishEarly ->
+            val session = store.beginImport(accountId, publishEarly = publishEarly)
             object : StagedM3uImport {
                 override suspend fun write(batch: M3uBatch) = session.write(batch)
                 override suspend fun commit() = session.commit()
@@ -25,12 +25,24 @@ class M3uRoomImporter private constructor(
         },
     )
 
-    internal constructor(parser: M3uParser, session: StagedM3uImport) : this(parser, { session })
+    internal constructor(parser: M3uParser, session: StagedM3uImport) : this(parser, { _, _ -> session })
 
-    suspend fun import(account: IptvAccount, inputStream: InputStream): M3uStreamResult {
-        val session = sessionFactory(account.id)
+    suspend fun import(
+        account: IptvAccount,
+        inputStream: InputStream,
+        publishEarly: Boolean = false,
+        onFirstBatchCommitted: suspend () -> Unit = {},
+    ): M3uStreamResult {
+        val session = sessionFactory(account.id, publishEarly)
+        var firstBatchCommitted = false
         return try {
-            parser.parseStreaming(account, inputStream) { session.write(it) }
+            parser.parseStreaming(account, inputStream) {
+                session.write(it)
+                if (publishEarly && !firstBatchCommitted) {
+                    firstBatchCommitted = true
+                    onFirstBatchCommitted()
+                }
+            }
                 .also { session.commit() }
         } catch (error: Throwable) {
             withContext(NonCancellable) { session.discard() }

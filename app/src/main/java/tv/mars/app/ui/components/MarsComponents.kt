@@ -29,7 +29,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -256,7 +255,7 @@ fun ErrorBanner(message: String?, onDismiss: () -> Unit, modifier: Modifier = Mo
 }
 
 @Composable
-fun LoadingOverlay(visible: Boolean, onCancel: (() -> Unit)? = null) {
+fun LoadingOverlay(visible: Boolean) {
     if (!visible) return
     Box(
         modifier = Modifier.fillMaxSize().background(MarsMidnight.copy(alpha = 0.70f)),
@@ -271,10 +270,6 @@ fun LoadingOverlay(visible: Boolean, onCancel: (() -> Unit)? = null) {
                     CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MarsRed, strokeWidth = 3.dp)
                     Spacer(Modifier.width(14.dp))
                     Text("Loading your lineup…", color = MarsWhite)
-                }
-                if (onCancel != null) {
-                    Spacer(Modifier.height(10.dp))
-                    TextButton(onClick = onCancel) { Text("Cancel import") }
                 }
             }
         }

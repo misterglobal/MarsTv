@@ -85,7 +85,8 @@ class M3uParser {
             .firstOrNull()
             .orEmpty()
         val emitter = StreamingBatchEmitter(batchSize, emit)
-        val categoriesByKey = HashMap<String, Category>()
+        val normalizedGroups = HashMap<String, String>()
+        val categoriesByKindAndName = HashMap<ContentKind, MutableMap<String, Category>>()
         val seriesByTitle = HashMap<String, StreamingSeriesState>()
         var itemIndex = 0
         var liveEntries = 0
@@ -102,10 +103,12 @@ class M3uParser {
 
             itemIndex++
             val resolvedUrl = resolve(account.m3uUrl, url)
-            val attrs = attributes(info)
+            val attrs = entryAttributes(info)
             val fallbackTitle = info.substringAfterLast(',', "Channel $itemIndex").trim()
-            val title = attrs["tvg-name"].orEmpty().ifBlank { fallbackTitle }
-            val rawGroup = normalizeGroup(attrs["group-title"].orEmpty())
+            val title = attrs.name.ifBlank { fallbackTitle }
+            val rawGroup = normalizedGroups[attrs.group] ?: normalizeGroup(attrs.group).also {
+                normalizedGroups[attrs.group] = it
+            }
             val remoteId = stableId(resolvedUrl, itemIndex)
             val classification = detectKind(resolvedUrl, rawGroup, title)
             if (!classification.recognized) unclassifiedEntries++
@@ -118,15 +121,18 @@ class M3uParser {
             }
             val categoryKind = if (classification.kind == ContentKind.LIVE) ContentKind.LIVE
                 else if (classification.kind == ContentKind.MOVIE) ContentKind.MOVIE else ContentKind.SERIES
-            val categoryKey = "${categoryKind.name.lowercase(Locale.US)}:${slug(group)}"
-            val category = categoriesByKey[categoryKey] ?: Category(
-                key = categoryKey,
-                remoteId = categoryKey.substringAfter(':'),
-                name = group,
-                kind = categoryKind,
-            ).also {
-                categoriesByKey[categoryKey] = it
-                emitter.addCategory(it)
+            val categoriesByName = categoriesByKindAndName.getOrPut(categoryKind) { HashMap() }
+            val category = categoriesByName[group] ?: run {
+                val remoteCategoryId = slug(group)
+                Category(
+                    key = "${categoryKind.name.lowercase(Locale.US)}:$remoteCategoryId",
+                    remoteId = remoteCategoryId,
+                    name = group,
+                    kind = categoryKind,
+                ).also {
+                    categoriesByName[group] = it
+                    emitter.addCategory(it)
+                }
             }
 
             when (classification.kind) {
@@ -139,13 +145,12 @@ class M3uParser {
                             name = title,
                             categoryKey = category.key,
                             categoryName = category.name,
-                            logoUrl = attrs["tvg-logo"].orEmpty(),
-                            epgId = attrs["tvg-id"].orEmpty().ifBlank { title },
+                            logoUrl = attrs.logo,
+                            epgId = attrs.id.ifBlank { title },
                             playbackUrl = resolvedUrl,
-                            supportsCatchUp = attrs["catchup"].orEmpty().isNotBlank() ||
-                                attrs["catchup-source"].orEmpty().isNotBlank(),
-                            catchUpDays = attrs["catchup-days"]?.toIntOrNull() ?: 0,
-                            catchUpTemplate = attrs["catchup-source"].orEmpty(),
+                            supportsCatchUp = attrs.catchUp.isNotBlank() || attrs.catchUpSource.isNotBlank(),
+                            catchUpDays = attrs.catchUpDays.toIntOrNull() ?: 0,
+                            catchUpTemplate = attrs.catchUpSource,
                         ),
                     )
                     liveEntries++
@@ -161,7 +166,7 @@ class M3uParser {
                             kind = ContentKind.MOVIE,
                             categoryKey = category.key,
                             categoryName = category.name,
-                            artworkUrl = attrs["tvg-logo"].orEmpty(),
+                            artworkUrl = attrs.logo,
                             playbackUrl = resolvedUrl,
                         ),
                     )
@@ -175,7 +180,7 @@ class M3uParser {
                         remoteId = remoteId,
                         title = title,
                         category = category,
-                        artworkUrl = attrs["tvg-logo"].orEmpty(),
+                        artworkUrl = attrs.logo,
                         playbackUrl = resolvedUrl,
                         emitter = emitter,
                     )
@@ -295,6 +300,43 @@ class M3uParser {
     private fun attributes(line: String): Map<String, String> = attributePattern.findAll(line)
         .associate { it.groupValues[1].lowercase(Locale.US) to it.groupValues[2] }
 
+    private fun entryAttributes(line: String): EntryAttributes {
+        var id = ""
+        var name = ""
+        var logo = ""
+        var group = ""
+        var catchUp = ""
+        var catchUpSource = ""
+        var catchUpDays = ""
+        var cursor = 0
+        while (true) {
+            val separator = line.indexOf("=\"", cursor)
+            if (separator < 0) break
+            var keyStart = separator - 1
+            while (keyStart >= 0 && (line[keyStart].isLetterOrDigit() || line[keyStart] == '-' || line[keyStart] == '_')) {
+                keyStart--
+            }
+            keyStart++
+            val valueStart = separator + 2
+            val valueEnd = line.indexOf('"', valueStart)
+            if (valueEnd < 0) break
+            val keyLength = separator - keyStart
+            fun keyIs(expected: String): Boolean = keyLength == expected.length &&
+                line.regionMatches(keyStart, expected, 0, expected.length, ignoreCase = true)
+            when {
+                keyIs("tvg-id") -> id = line.substring(valueStart, valueEnd)
+                keyIs("tvg-name") -> name = line.substring(valueStart, valueEnd)
+                keyIs("tvg-logo") -> logo = line.substring(valueStart, valueEnd)
+                keyIs("group-title") -> group = line.substring(valueStart, valueEnd)
+                keyIs("catchup") -> catchUp = line.substring(valueStart, valueEnd)
+                keyIs("catchup-source") -> catchUpSource = line.substring(valueStart, valueEnd)
+                keyIs("catchup-days") -> catchUpDays = line.substring(valueStart, valueEnd)
+            }
+            cursor = valueEnd + 1
+        }
+        return EntryAttributes(id, name, logo, group, catchUp, catchUpSource, catchUpDays)
+    }
+
     private fun detectKind(url: String, group: String, title: String): Classification {
         val normalizedGroup = group.lowercase(Locale.US)
         return when {
@@ -320,9 +362,16 @@ class M3uParser {
     private fun stableId(url: String, index: Int): String =
         url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.').ifBlank { index.toString() }
 
-    private fun resolve(base: String, candidate: String): String = runCatching {
-        URI(base).resolve(candidate).toString()
-    }.getOrDefault(candidate)
+    private fun resolve(base: String, candidate: String): String {
+        if (candidate.startsWith("http://", ignoreCase = true) ||
+            candidate.startsWith("https://", ignoreCase = true) ||
+            candidate.startsWith("udp://", ignoreCase = true) ||
+            candidate.startsWith("rtp://", ignoreCase = true)
+        ) {
+            return candidate
+        }
+        return runCatching { URI(base).resolve(candidate).toString() }.getOrDefault(candidate)
+    }
 
     private fun normalizeGroup(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .replace(whitespacePattern, " ")
@@ -340,6 +389,16 @@ class M3uParser {
         val recognized: Boolean = true,
     )
 
+    private data class EntryAttributes(
+        val id: String,
+        val name: String,
+        val logo: String,
+        val group: String,
+        val catchUp: String,
+        val catchUpSource: String,
+        val catchUpDays: String,
+    )
+
     private data class StreamingSeriesState(
         var media: MediaContent,
         val episodeCountsBySeason: MutableMap<Int, Int> = HashMap(),
@@ -349,10 +408,10 @@ class M3uParser {
         private val batchSize: Int,
         private val emit: suspend (M3uBatch) -> Unit,
     ) {
-        private val categories = ArrayList<Category>()
-        private val channels = ArrayList<Channel>()
-        private val media = ArrayList<MediaContent>()
-        private val episodes = ArrayList<M3uEpisode>()
+        private var categories = ArrayList<Category>()
+        private var channels = ArrayList<Channel>()
+        private var media = ArrayList<MediaContent>()
+        private var episodes = ArrayList<M3uEpisode>()
         private var rowCount = 0
 
         suspend fun addCategory(value: Category) = add(categories, value)
@@ -368,17 +427,18 @@ class M3uParser {
 
         suspend fun flush() {
             if (rowCount == 0) return
-            emit(M3uBatch(categories.toList(), channels.toList(), media.toList(), episodes.toList()))
-            categories.clear()
-            channels.clear()
-            media.clear()
-            episodes.clear()
+            val batch = M3uBatch(categories, channels, media, episodes)
+            categories = ArrayList()
+            channels = ArrayList()
+            media = ArrayList()
+            episodes = ArrayList()
             rowCount = 0
+            emit(batch)
         }
     }
 
     companion object {
-        const val DEFAULT_STREAM_BATCH_SIZE = 400
+        const val DEFAULT_STREAM_BATCH_SIZE = 500
         const val MAX_STREAM_BATCH_SIZE = 500
     }
 }

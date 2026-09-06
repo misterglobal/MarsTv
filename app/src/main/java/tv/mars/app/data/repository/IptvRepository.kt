@@ -39,13 +39,16 @@ class IptvRepository(
     private val xtream = XtreamClient(network, xmlTv)
     private val m3uRoomImporter = M3uRoomImporter(m3u, roomCatalog)
 
-    suspend fun refreshCatalog(account: IptvAccount): Long = when (account.sourceType) {
+    suspend fun refreshCatalog(
+        account: IptvAccount,
+        onInitialCatalogAvailable: suspend (Long) -> Unit = {},
+    ): Long = when (account.sourceType) {
         SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> {
             val catalog = xtream.loadCatalog(account)
             roomCatalog.replaceCatalog(catalog)
             catalog.loadedAt
         }
-        SourceType.M3U -> loadM3u(account)
+        SourceType.M3U -> loadM3u(account, onInitialCatalogAvailable)
     }
 
     suspend fun catalogLoadedAt(accountId: String): Long? = roomCatalog.catalogLoadedAt(accountId)
@@ -161,7 +164,10 @@ class IptvRepository(
         )
     }
 
-    private suspend fun loadM3u(account: IptvAccount): Long {
+    private suspend fun loadM3u(
+        account: IptvAccount,
+        onInitialCatalogAvailable: suspend (Long) -> Unit,
+    ): Long {
         // A refresh must not retain the previous episode graph while a new one is built.
         account.xtreamAccountFromM3u()?.let { xtreamAccount ->
             val xtreamResult = runCatching { xtream.loadCatalog(xtreamAccount) }
@@ -178,9 +184,15 @@ class IptvRepository(
             Log.w(TAG, "Xtream discovery failed; using M3U classification fallback")
         }
 
+        val publishEarly = !roomCatalog.hasCatalog(account.id)
         var parsed: tv.mars.app.data.network.M3uStreamResult? = null
         network.getStream(account.m3uUrl) { stream ->
-            parsed = m3uRoomImporter.import(account, stream)
+            parsed = m3uRoomImporter.import(
+                account = account,
+                inputStream = stream,
+                publishEarly = publishEarly,
+                onFirstBatchCommitted = { onInitialCatalogAvailable(System.currentTimeMillis()) },
+            )
         }
         val result = parsed ?: error("Failed to parse M3U playlist")
         Log.i(

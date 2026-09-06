@@ -19,6 +19,7 @@ paging = "3.5.1"
 ksp = "2.3.10"
 androidxTestCore = "1.6.1"
 androidxTestJunit = "1.2.1"
+androidxTestRunner = "1.6.2"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -53,6 +54,7 @@ androidx-paging-compose = { module = "androidx.paging:paging-compose", version.r
 androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 androidx-test-core-ktx = { module = "androidx.test:core-ktx", version.ref = "androidxTestCore" }
 androidx-test-junit-ktx = { module = "androidx.test.ext:junit-ktx", version.ref = "androidxTestJunit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

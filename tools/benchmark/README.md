@@ -1,6 +1,6 @@
 # MarsTV 100k device benchmark
 
-The initial Pro launch baseline is an Android TV device or emulator with approximately 2 GB RAM. The former 1 GB Fire TV Stick Lite requirement is waived; the 100,000-entry workload and all timing, memory, cancellation, and `largeHeap` criteria still apply.
+The initial Pro launch baseline is an Android TV device or emulator with approximately 2 GB RAM. The former 1 GB Fire TV Stick Lite requirement is waived; the 100,000-entry workload and all timing, memory, and `largeHeap` criteria still apply.
 
 This workflow collects the evidence required by Section 7 of the MarsTV Pro PRD. Passing on a desktop JVM does not replace the physical-device run.
 
@@ -24,14 +24,13 @@ adb -s <serial> shell pm clear tv.mars.app
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\benchmark\capture-device-benchmark.ps1 -Serial <serial> -OutputDirectory .\tools\benchmark\results\android-tv-2gb-run-1
 ```
 
-In MarsTV, connect the fixture account. For cancellation runs, press **Cancel import** after parsing has begun. The capture records these log markers without account identifiers or URLs:
+In MarsTV, connect the fixture account. Imports do not expose a user cancel action. The capture records these log markers without account identifiers or URLs:
 
 - `catalog_start`
+- `catalog_first_usable durationMs=...`
 - `catalog_complete durationMs=...`
-- `catalog_cancel_requested`
-- `catalog_cancel_stopped cancelLatencyMs=...`
 
-Run at least three cold imports and one cancellation. Record the worst passing result, not only the fastest result.
+Run at least three cold imports. Record the worst passing result, not only the fastest result.
 
 ## Pass criteria
 
@@ -39,8 +38,7 @@ Run at least three cold imports and one cancellation. Record the worst passing r
 - Complete import: no more than 180 seconds.
 - Peak Java/Kotlin heap: below 192 MiB and below 60% of the runtime heap limit.
 - Settled Java/Kotlin heap after forced test GC: below 128 MiB.
-- Cancellation acknowledged by the UI: no more than 2 seconds.
-- Import job fully stopped: no more than 5 seconds after the cancel request.
-- No crash, ANR, process restart, partial generation activation, or resumed database growth after cancellation.
+- No crash, ANR, or process restart.
+- The first committed catalog page becomes usable while the remaining import continues.
 
 `dumpsys meminfo` is sampled evidence, not a forced-GC mechanism. Use Android Studio's Memory Profiler or benchmark-only instrumentation for the final Java/Kotlin heap and forced-GC readings.

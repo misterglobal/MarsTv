@@ -96,7 +96,11 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 val activeId = _uiState.value.activeAccount?.id
-                if (activeId != null && ((activeId != previousAccount) || (_uiState.value.loadedCatalogAccountId != activeId))) {
+                val activeImportAlreadyVisible = _uiState.value.isCatalogLoading &&
+                    _uiState.value.loadedCatalogAccountId == activeId
+                if (activeId != null && !activeImportAlreadyVisible &&
+                    ((activeId != previousAccount) || (_uiState.value.loadedCatalogAccountId != activeId))
+                ) {
                     loadActiveAccount()
                 }
             }
@@ -116,7 +120,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
         Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
         catalogJob = viewModelScope.launch {
-            _uiState.update { it.copy(isConnecting = true, errorMessage = null) }
+            _uiState.update { it.copy(isConnecting = true, isCatalogLoading = true, errorMessage = null) }
             val resolvedServer = if (sourceType == SourceType.PRIVATE_XTREAM) {
                 BuildConfig.PRIVATE_PORTAL_URL
             } else {
@@ -137,7 +141,28 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 m3uUrl = normalizeUrl(m3uUrl),
             )
 
-            runCatching { repository.refreshCatalog(account) }
+            var accountPublished = false
+            runCatching {
+                repository.refreshCatalog(account) { previewRevision ->
+                    if (!accountPublished) {
+                        accountPublished = true
+                        Log.i(
+                            BENCHMARK_TAG,
+                            "catalog_first_usable durationMs=${SystemClock.elapsedRealtime() - catalogStartedAtElapsedMs}",
+                        )
+                        _uiState.update {
+                            it.copy(
+                                loadedCatalogAccountId = account.id,
+                                catalogRevision = previewRevision,
+                                overlay = OverlayScreen.NONE,
+                                isConnecting = false,
+                                isCatalogLoading = true,
+                            )
+                        }
+                        stateStore.addAccount(account)
+                    }
+                }
+            }
                 .onSuccess { revision ->
                     logCatalogCompleted()
                     _uiState.update {
@@ -146,16 +171,29 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                             catalogRevision = revision,
                             overlay = OverlayScreen.NONE,
                             isConnecting = false,
+                            isCatalogLoading = false,
                             errorMessage = null,
                         )
                     }
-                    stateStore.addAccount(account)
+                    if (!accountPublished) stateStore.addAccount(account)
                 }
                 .onFailure { error ->
+                    if (accountPublished) {
+                        stateStore.removeAccount(account.id)
+                        _uiState.update {
+                            it.copy(
+                                loadedCatalogAccountId = if (it.loadedCatalogAccountId == account.id) null else it.loadedCatalogAccountId,
+                                isConnecting = false,
+                                isCatalogLoading = false,
+                            )
+                        }
+                    }
                     if (error is CancellationException) return@onFailure
                     _uiState.update {
                         it.copy(
+                            loadedCatalogAccountId = if (it.loadedCatalogAccountId == account.id) null else it.loadedCatalogAccountId,
                             isConnecting = false,
+                            isCatalogLoading = false,
                             errorMessage = error.message?.take(240) ?: "Could not connect to this source",
                         )
                     }
@@ -238,24 +276,6 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     }
                 }
-        }
-    }
-
-    fun cancelCatalogLoad() {
-        val activeJob = catalogJob?.takeIf { it.isActive } ?: return
-        val cancelRequestedAt = SystemClock.elapsedRealtime()
-        Log.i(BENCHMARK_TAG, "catalog_cancel_requested elapsedMs=${cancelRequestedAt - catalogStartedAtElapsedMs}")
-        activeJob.invokeOnCompletion {
-            Log.i(BENCHMARK_TAG, "catalog_cancel_stopped cancelLatencyMs=${SystemClock.elapsedRealtime() - cancelRequestedAt}")
-        }
-        activeJob.cancel(CancellationException("Catalog import cancelled by user"))
-        _uiState.update {
-            it.copy(
-                isConnecting = false,
-                isLoading = false,
-                isCatalogLoading = false,
-                errorMessage = "Catalog import cancelled",
-            )
         }
     }
 

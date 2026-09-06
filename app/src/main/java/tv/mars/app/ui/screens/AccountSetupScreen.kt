@@ -54,7 +54,6 @@ fun AccountSetupScreen(
     errorMessage: String?,
     onClearError: () -> Unit,
     onConnect: (SourceType, String, String, String, String, String) -> Unit,
-    onCancelImport: () -> Unit,
     onCancel: (() -> Unit)?,
 ) {
     var method by rememberSaveable {
@@ -67,7 +66,7 @@ fun AccountSetupScreen(
     var m3uUrl by rememberSaveable { mutableStateOf("") }
     var showPassword by rememberSaveable { mutableStateOf(false) }
 
-    if (isConnecting) BackHandler(onBack = onCancelImport)
+    if (isConnecting) BackHandler(onBack = {})
     else if (onCancel != null) BackHandler(onBack = onCancel)
 
     val valid = when (method) {
@@ -109,7 +108,6 @@ fun AccountSetupScreen(
                     errorMessage = errorMessage,
                     onClearError = onClearError,
                     onSubmit = { onConnect(method, accountName, serverUrl, username, password, m3uUrl) },
-                    onCancelImport = onCancelImport,
                     onCancel = onCancel,
                     modifier = Modifier.weight(1.15f),
                 )
@@ -139,7 +137,6 @@ fun AccountSetupScreen(
                     errorMessage = errorMessage,
                     onClearError = onClearError,
                     onSubmit = { onConnect(method, accountName, serverUrl, username, password, m3uUrl) },
-                    onCancelImport = onCancelImport,
                     onCancel = onCancel,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -190,7 +187,6 @@ private fun AccountForm(
     errorMessage: String?,
     onClearError: () -> Unit,
     onSubmit: () -> Unit,
-    onCancelImport: () -> Unit,
     onCancel: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
@@ -292,9 +288,7 @@ private fun AccountForm(
         ErrorBanner(message = errorMessage, onDismiss = onClearError)
         Spacer(Modifier.height(14.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            if (isConnecting) {
-                MarsButton(text = "Cancel import", onClick = onCancelImport, modifier = Modifier.weight(0.7f))
-            } else if (onCancel != null) {
+            if (!isConnecting && onCancel != null) {
                 MarsButton(text = "Cancel", onClick = onCancel, modifier = Modifier.weight(0.55f))
             }
             MarsButton(

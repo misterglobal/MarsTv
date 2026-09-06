@@ -74,8 +74,11 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         }
     }
 
-    fun beginImport(accountId: String, loadedAt: Long = System.currentTimeMillis()): ImportSession =
-        ImportSession(accountId, UUID.randomUUID().toString(), loadedAt)
+    fun beginImport(
+        accountId: String,
+        loadedAt: Long = System.currentTimeMillis(),
+        publishEarly: Boolean = false,
+    ): ImportSession = ImportSession(accountId, UUID.randomUUID().toString(), loadedAt, publishEarly)
 
     suspend fun hasCatalog(accountId: String): Boolean = dao.hasActiveImport(accountId)
 
@@ -88,8 +91,10 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         private val accountId: String,
         private val generation: String,
         private val loadedAt: Long,
+        private val publishEarly: Boolean,
     ) {
         private var finished = false
+        private var publishedEarly = false
 
         suspend fun write(batch: M3uBatch) {
             check(!finished) { "Catalog import session is already finished" }
@@ -99,12 +104,19 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
                 if (batch.categories.isNotEmpty()) {
                     dao.insertCategories(batch.categories.map { it.toEntity(accountId, generation) })
                 }
-                val items = batch.channels.map { it.toEntity(generation) } + batch.media.map { it.toEntity(generation) }
+                val items = ArrayList<CatalogItemEntity>(batch.channels.size + batch.media.size)
+                batch.channels.forEach { items += it.toEntity(generation) }
+                batch.media.forEach { items += it.toEntity(generation) }
                 if (items.isNotEmpty()) dao.insertItems(items)
                 if (batch.episodes.isNotEmpty()) {
                     dao.insertEpisodes(batch.episodes.map { it.episode.toEntity(generation, it.seriesId) })
                 }
+                if (publishEarly && !publishedEarly) {
+                    // A zero timestamp makes an interrupted preview refresh on the next launch.
+                    dao.insertImport(CatalogImportEntity(accountId, generation, 0L))
+                }
             }
+            if (publishEarly) publishedEarly = true
         }
 
         suspend fun commit() {
@@ -121,6 +133,9 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
         suspend fun discard() {
             if (finished) return
             deleteGeneration(accountId, generation)
+            if (publishedEarly) database.withTransaction {
+                dao.deleteImportGeneration(accountId, generation)
+            }
             finished = true
         }
     }

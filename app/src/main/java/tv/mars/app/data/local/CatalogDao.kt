@@ -223,4 +223,7 @@ interface CatalogDao {
     @Query("DELETE FROM catalog_imports WHERE account_id = :accountId")
     suspend fun deleteImport(accountId: String)
 
+    @Query("DELETE FROM catalog_imports WHERE account_id = :accountId AND active_generation = :generation")
+    suspend fun deleteImportGeneration(accountId: String, generation: String)
+
 }
