@@ -3,10 +3,7 @@
     <application>
         <receiver
             android:name="tv.mars.app.benchmark.ForceGcReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="tv.mars.app.benchmark.FORCE_GC" />
-            </intent-filter>
-        </receiver>
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>

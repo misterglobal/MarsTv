@@ -21,6 +21,7 @@ import tv.mars.app.data.network.M3uParser
 import tv.mars.app.data.network.NetworkClient
 import tv.mars.app.data.network.XmlTvParser
 import tv.mars.app.data.network.XtreamClient
+import tv.mars.app.data.network.resolveXtreamPlaybackReference
 import tv.mars.app.data.local.RoomCatalogStore
 import java.net.URI
 import java.net.URLDecoder
@@ -118,14 +119,23 @@ class IptvRepository(
         persistence.clear(accountId)
     }
 
-    fun liveRequest(channel: Channel): PlayerRequest = PlayerRequest(
+    fun liveRequest(account: IptvAccount, channel: Channel): PlayerRequest = PlayerRequest(
         contentKey = channel.key,
         accountId = channel.accountId,
         title = channel.name,
-        url = channel.playbackUrl,
+        url = playbackUrl(account, channel.playbackUrl),
         kind = ContentKind.LIVE,
         artworkUrl = channel.logoUrl,
     )
+
+    fun playbackUrl(account: IptvAccount, storedValue: String): String {
+        val playbackAccount = if (account.sourceType == SourceType.M3U) {
+            account.xtreamAccountFromM3u() ?: account
+        } else {
+            account
+        }
+        return resolveXtreamPlaybackReference(playbackAccount, storedValue)
+    }
 
     fun catchUpRequest(account: IptvAccount, channel: Channel, programme: Programme): PlayerRequest? {
         if (!channel.supportsCatchUp || !programme.isPast) return null

@@ -370,12 +370,15 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun playChannel(channel: Channel) = openPlayer(repository.liveRequest(channel))
+    fun playChannel(channel: Channel) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
+        openPlayer(repository.liveRequest(account, channel))
+    }
 
     fun playProgramme(channel: Channel, programme: Programme) {
-        val account = _uiState.value.activeAccount ?: return
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
         val request = when {
-            programme.isLive -> repository.liveRequest(channel)
+            programme.isLive -> repository.liveRequest(account, channel)
             programme.isPast -> repository.catchUpRequest(account, channel, programme)
             else -> null
         }
@@ -383,6 +386,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openMedia(media: MediaContent) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == media.accountId } ?: return
         if (media.kind != ContentKind.SERIES || media.seriesId.isBlank()) {
             if (media.playbackUrl.isNotBlank()) {
                 val resume = _uiState.value.watchHistory.firstOrNull { it.contentKey == media.key }?.positionMs ?: 0L
@@ -391,7 +395,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         contentKey = media.key,
                         accountId = media.accountId,
                         title = media.title,
-                        url = media.playbackUrl,
+                        url = repository.playbackUrl(account, media.playbackUrl),
                         kind = media.kind,
                         artworkUrl = media.artworkUrl,
                         resumePositionMs = resume,
@@ -401,7 +405,6 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        val account = _uiState.value.activeAccount ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             runCatching { repository.loadSeriesDetails(account, media) }
@@ -421,13 +424,14 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playEpisode(episode: Episode) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == episode.accountId } ?: return
         val resume = _uiState.value.watchHistory.firstOrNull { it.contentKey == episode.key }?.positionMs ?: 0L
         openPlayer(
             PlayerRequest(
                 contentKey = episode.key,
                 accountId = episode.accountId,
                 title = episode.title,
-                url = episode.playbackUrl,
+                url = repository.playbackUrl(account, episode.playbackUrl),
                 kind = ContentKind.EPISODE,
                 artworkUrl = episode.artworkUrl,
                 resumePositionMs = resume,

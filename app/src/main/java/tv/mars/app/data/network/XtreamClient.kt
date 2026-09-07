@@ -190,7 +190,7 @@ class XtreamClient(
             categoryName = categoryName ?: "Uncategorized",
             logoUrl = item.string("stream_icon"),
             epgId = item.string("epg_channel_id").ifBlank { name },
-            playbackUrl = streamUrl(account, "live", id, extension),
+            playbackUrl = xtreamPlaybackReference("live", id, extension),
             supportsCatchUp = item.string("tv_archive") == "1",
             catchUpDays = item.int("tv_archive_duration"),
         )
@@ -213,7 +213,7 @@ class XtreamClient(
             categoryKey = categoryKey(account, ContentKind.MOVIE, categoryId),
             categoryName = categoryName ?: "Uncategorized",
             artworkUrl = item.string("stream_icon"),
-            playbackUrl = streamUrl(account, "movie", id, extension),
+            playbackUrl = xtreamPlaybackReference("movie", id, extension),
             rating = item.string("rating_5based").ifBlank { item.string("rating") },
             year = item.string("year").ifBlank { item.string("release_date").take(4) },
         )
@@ -277,7 +277,7 @@ class XtreamClient(
             title = item.string("title").ifBlank { "Episode ${item.int("episode_num", fallbackEpisode)}" },
             seasonNumber = item.int("season", fallbackSeason),
             episodeNumber = item.int("episode_num", fallbackEpisode),
-            playbackUrl = streamUrl(account, "series", id, extension),
+            playbackUrl = xtreamPlaybackReference("series", id, extension),
             artworkUrl = info?.string("movie_image").orEmpty(),
             description = info?.string("plot").orEmpty(),
             durationText = info?.string("duration").orEmpty(),
@@ -295,9 +295,6 @@ class XtreamClient(
         extra.forEach { (key, value) -> builder.appendQueryParameter(key, value) }
         return builder.build().toString()
     }
-
-    private fun streamUrl(account: IptvAccount, section: String, id: String, extension: String): String =
-        "${account.serverUrl.trimEnd('/')}/$section/${Uri.encode(account.username)}/${Uri.encode(account.password)}/${Uri.encode(id)}.${extension.ifBlank { "ts" }}"
 
     private class XtreamBatchEmitter(
         private val emit: suspend (M3uBatch) -> Unit,
