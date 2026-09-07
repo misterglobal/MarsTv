@@ -55,17 +55,17 @@ Run at least three cold imports. Record the worst passing result, not only the f
 
 `dumpsys meminfo` is sampled evidence, not a forced-GC mechanism. Use Android Studio's Memory Profiler or benchmark-only instrumentation for the final Java/Kotlin heap and forced-GC readings.
 
-## Latest reference run
+## Latest reference runs
 
-On 2026-09-07, the minified release benchmark build completed one cold run on the 2 GB
-Android 11 x86 TV emulator through an ADB reverse tunnel:
+On 2026-09-07, the minified release benchmark build completed three cold runs on the 2 GB
+Android 11 x86 TV emulator through an ADB reverse tunnel. The worst passing measurements were:
 
-- First usable page: 345 ms.
+- First usable page: 473 ms.
 - Complete 100,000-entry import: 67,098 ms.
 - Counts: 15,000 live, 45,000 movies, 40,000 series episodes, 0 unclassified.
-- Peak sampled Java heap PSS: 12,156 KiB; peak Dalvik allocation: 6,974 KiB.
-- Peak total process PSS: 75,363 KiB; settled total process PSS: 58,651 KiB.
+- Peak sampled Java heap PSS: 14,012 KiB; peak Dalvik allocation: 7,599 KiB.
+- Peak total process PSS: 78,295 KiB; settled total process PSS: 60,667 KiB.
 - No crash, ANR, process restart, or `largeHeap` flag.
 
-This is a reference pass, not the full release gate: two more cold runs, final forced-GC
-evidence, production signing, and release-over-release installation evidence remain required.
+The three-run timing and sampled-memory gate passes. Final forced-GC evidence, production
+signing, and release-over-release installation evidence remain required.
