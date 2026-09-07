@@ -36,6 +36,9 @@ import tv.mars.app.data.local.SecureStateStore
 import tv.mars.app.data.local.MarsTvDatabase
 import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
+import tv.mars.app.entitlement.EntitlementManager
+import tv.mars.app.entitlement.ProFeature
+import tv.mars.app.entitlement.createEntitlementManager
 
 data class MarsUiState(
     val local: LocalState = LocalState(),
@@ -74,6 +77,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
+    private val entitlementManager: EntitlementManager = createEntitlementManager()
     private var catalogJob: Job? = null
     private var catalogJobAccountId: String? = null
     private var catalogStartedAtElapsedMs = 0L
@@ -84,6 +88,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
+            stateStore.migrateForFreeGates()
             stateStore.state.collectLatest { local ->
                 val previousAccount = _uiState.value.activeAccount?.id
                 _uiState.update {
@@ -116,6 +121,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         m3uUrl: String,
     ) {
         if (_uiState.value.isConnecting) return
+        if (_uiState.value.local.accounts.isNotEmpty() && !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)) {
+            showLockedFeature("Multiple TV sources")
+            return
+        }
         catalogJob?.cancel()
         catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
         Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
@@ -290,6 +299,12 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectAccount(accountId: String) {
+        if (accountId != _uiState.value.local.activeAccountId &&
+            !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)
+        ) {
+            showLockedFeature("Switching TV sources")
+            return
+        }
         viewModelScope.launch { stateStore.setActiveAccount(accountId) }
     }
 
@@ -355,7 +370,15 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }
     }
 
-    fun showAddAccount() = _uiState.update { it.copy(overlay = OverlayScreen.ADD_ACCOUNT, errorMessage = null) }
+    fun showAddAccount() {
+        if (_uiState.value.local.accounts.isNotEmpty() &&
+            !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)
+        ) {
+            showLockedFeature("Multiple TV sources")
+            return
+        }
+        _uiState.update { it.copy(overlay = OverlayScreen.ADD_ACCOUNT, errorMessage = null) }
+    }
     fun showProfiles() = _uiState.update { it.copy(overlay = OverlayScreen.PROFILES, errorMessage = null) }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
     fun setSearchQuery(value: String) = _uiState.update { it.copy(searchQuery = value) }
@@ -377,6 +400,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun playProgramme(channel: Channel, programme: Programme) {
         val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
+        if (programme.isPast && !entitlementManager.hasFeature(ProFeature.CATCH_UP)) {
+            showLockedFeature("Catch-up playback")
+            return
+        }
         val request = when {
             programme.isLive -> repository.liveRequest(account, channel)
             programme.isPast -> repository.catchUpRequest(account, channel, programme)
@@ -536,6 +563,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun openPlayer(request: PlayerRequest) {
         _uiState.update { it.copy(playerRequest = request, overlay = OverlayScreen.PLAYER) }
+    }
+
+    private fun showLockedFeature(name: String) {
+        _uiState.update { it.copy(errorMessage = "$name requires MarsTV Pro") }
     }
 
     private fun normalizeUrl(raw: String): String {

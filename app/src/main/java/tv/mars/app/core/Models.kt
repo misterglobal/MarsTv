@@ -68,6 +68,7 @@ data class LocalState(
     val activeProfileId: String? = null,
     val favouriteKeysByProfile: Map<String, Set<String>> = emptyMap(),
     val watchHistoryByProfile: Map<String, List<WatchRecord>> = emptyMap(),
+    val entitlementMigrationVersion: Int = 0,
 )
 
 @Serializable
