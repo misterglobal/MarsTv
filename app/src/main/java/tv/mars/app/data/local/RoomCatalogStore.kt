@@ -222,38 +222,53 @@ class RoomCatalogStore(private val database: MarsTvDatabase) {
     ).map { values -> values.map(CatalogProgrammeEntity::toModel) }
 
     suspend fun replaceProgrammes(accountId: String, programmesByEpgId: Map<String, List<Programme>>) {
-        val generation = dao.activeGeneration(accountId) ?: return
-        deleteBatches(
-            load = { dao.activeProgrammes(accountId, generation, IMPORT_BATCH_SIZE) },
-            delete = dao::deleteProgrammes,
-        )
-        writeBatches(
-            programmesByEpgId.retainedProgrammeEntities(accountId, generation),
-            dao::insertProgrammes,
-        )
+        val session = beginProgrammeImport(accountId) ?: return
+        try {
+            programmesByEpgId.values.asSequence().flatten().forEachDatabaseBatch { session.write(it) }
+            session.commit()
+        } catch (error: Throwable) {
+            withContext(NonCancellable) { session.discard() }
+            throw error
+        }
     }
 
     suspend fun beginProgrammeImport(accountId: String): ProgrammeImportSession? {
-        val generation = dao.activeGeneration(accountId) ?: return null
-        deleteBatches(
-            load = { dao.activeProgrammes(accountId, generation, IMPORT_BATCH_SIZE) },
-            delete = dao::deleteProgrammes,
-        )
-        return ProgrammeImportSession(accountId, generation)
+        val activeGeneration = dao.activeGeneration(accountId) ?: return null
+        return ProgrammeImportSession(accountId, activeGeneration, UUID.randomUUID().toString())
     }
 
     inner class ProgrammeImportSession internal constructor(
         private val accountId: String,
-        private val generation: String,
+        private val activeGeneration: String,
+        private val stagingGeneration: String,
     ) {
+        private var finished = false
+
         suspend fun write(programmes: List<Programme>) {
+            check(!finished) { "Programme import session is already finished" }
             require(programmes.size <= IMPORT_BATCH_SIZE) { "EPG import batch exceeds $IMPORT_BATCH_SIZE rows" }
             currentCoroutineContext().ensureActive()
             val entities = programmes.asSequence()
                 .filterRetainedProgrammes()
-                .map { it.toEntity(accountId, generation) }
+                .map { it.toEntity(accountId, stagingGeneration) }
                 .toList()
             if (entities.isNotEmpty()) database.withTransaction { dao.insertProgrammes(entities) }
+        }
+
+        suspend fun commit() {
+            check(!finished) { "Programme import session is already finished" }
+            currentCoroutineContext().ensureActive()
+            database.withTransaction {
+                dao.deleteProgrammeGeneration(accountId, activeGeneration)
+                dao.moveProgrammeGeneration(accountId, stagingGeneration, activeGeneration)
+            }
+            finished = true
+        }
+
+        suspend fun discard() {
+            if (finished) return
+            dao.deleteProgrammeGeneration(accountId, stagingGeneration)
+            finished = true
         }
     }
 

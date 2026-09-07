@@ -3,7 +3,10 @@ package tv.mars.app.data.repository
 import android.net.Uri
 import android.util.Log
 import androidx.paging.PagingData
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import tv.mars.app.core.CatalogBundle
 import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
@@ -195,13 +198,15 @@ class IptvRepository(
             runCatching {
                 val resolvedEpg = resolve(account.m3uUrl, result.epgUrl)
                 val references = roomCatalog.channelReferences(account.id)
-                val programmeImport = roomCatalog.beginProgrammeImport(account.id)
-                network.getStream(resolvedEpg) { stream ->
-                    xmlTv.parseStreamingReferences(stream, references) { batch ->
-                        programmeImport?.write(batch)
+                importProgrammes(account.id) { write ->
+                    network.getStream(resolvedEpg) { stream ->
+                        xmlTv.parseStreamingReferences(stream, references, emit = write)
                     }
                 }
-            }.onFailure { Log.w(TAG, "Could not refresh the M3U programme guide", it) }
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.w(TAG, "Could not refresh the M3U programme guide", it)
+            }
         }
         return roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis()
     }
@@ -223,10 +228,26 @@ class IptvRepository(
         )
         runCatching {
             val references = roomCatalog.channelReferences(account.id)
-            val programmeImport = roomCatalog.beginProgrammeImport(account.id)
-            xtream.streamProgrammeGuide(account, references) { batch -> programmeImport?.write(batch) }
-        }.onFailure { Log.w(TAG, "Could not refresh the Xtream programme guide", it) }
+            importProgrammes(account.id) { write -> xtream.streamProgrammeGuide(account, references, write) }
+        }.onFailure {
+            if (it is CancellationException) throw it
+            Log.w(TAG, "Could not refresh the Xtream programme guide", it)
+        }
         return roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis()
+    }
+
+    private suspend fun importProgrammes(
+        accountId: String,
+        parse: suspend (write: suspend (List<Programme>) -> Unit) -> Unit,
+    ) {
+        val session = roomCatalog.beginProgrammeImport(accountId) ?: return
+        try {
+            parse(session::write)
+            session.commit()
+        } catch (error: Throwable) {
+            withContext(NonCancellable) { session.discard() }
+            throw error
+        }
     }
 
     private fun resolve(base: String, candidate: String): String = runCatching {

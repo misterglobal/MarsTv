@@ -172,13 +172,6 @@ interface CatalogDao {
         limit: Int,
     ): Flow<List<CatalogProgrammeEntity>>
 
-    @Query("SELECT * FROM catalog_programmes WHERE account_id = :accountId AND generation = :generation LIMIT :limit")
-    suspend fun activeProgrammes(
-        accountId: String,
-        generation: String,
-        limit: Int,
-    ): List<CatalogProgrammeEntity>
-
     @Query("SELECT * FROM catalog_categories WHERE account_id = :accountId AND generation != :activeGeneration LIMIT :limit")
     suspend fun obsoleteCategories(accountId: String, activeGeneration: String, limit: Int): List<CatalogCategoryEntity>
 
@@ -219,6 +212,15 @@ interface CatalogDao {
     @Delete suspend fun deleteItems(values: List<CatalogItemEntity>)
     @Delete suspend fun deleteEpisodes(values: List<CatalogEpisodeEntity>)
     @Delete suspend fun deleteProgrammes(values: List<CatalogProgrammeEntity>)
+
+    @Query("DELETE FROM catalog_programmes WHERE account_id = :accountId AND generation = :generation")
+    suspend fun deleteProgrammeGeneration(accountId: String, generation: String)
+
+    @Query(
+        """UPDATE catalog_programmes SET generation = :targetGeneration
+        WHERE account_id = :accountId AND generation = :sourceGeneration""",
+    )
+    suspend fun moveProgrammeGeneration(accountId: String, sourceGeneration: String, targetGeneration: String)
 
     @Query("DELETE FROM catalog_imports WHERE account_id = :accountId")
     suspend fun deleteImport(accountId: String)

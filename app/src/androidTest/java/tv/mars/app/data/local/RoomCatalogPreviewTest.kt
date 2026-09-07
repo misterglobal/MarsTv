@@ -16,6 +16,7 @@ import org.junit.runner.RunWith
 import tv.mars.app.core.Category
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
+import tv.mars.app.core.Programme
 import tv.mars.app.data.network.M3uBatch
 
 @RunWith(AndroidJUnit4::class)
@@ -63,5 +64,50 @@ class RoomCatalogPreviewTest {
         session.discard()
 
         assertFalse(store.hasCatalog(accountId))
+    }
+
+    @Test
+    fun failedProgrammeImportPreservesPreviousGuide() = runBlocking {
+        val accountId = "programme-account"
+        val now = System.currentTimeMillis()
+        val catalog = store.beginImport(accountId)
+        catalog.write(M3uBatch())
+        catalog.commit()
+        val oldProgramme = Programme("channel", "Old guide", "", now, now + 60_000L)
+        val replacement = Programme("channel", "Replacement", "", now, now + 60_000L)
+        store.beginProgrammeImport(accountId)!!.apply {
+            write(listOf(oldProgramme))
+            commit()
+        }
+
+        store.beginProgrammeImport(accountId)!!.apply {
+            write(listOf(replacement))
+            discard()
+        }
+
+        assertEquals(listOf(oldProgramme), store.programmes(accountId, "channel", now, now + 60_000L).first())
+    }
+
+    @Test
+    fun successfulProgrammeImportAtomicallyReplacesPreviousGuide() = runBlocking {
+        val accountId = "programme-replacement-account"
+        val now = System.currentTimeMillis()
+        val catalog = store.beginImport(accountId)
+        catalog.write(M3uBatch())
+        catalog.commit()
+        val oldProgramme = Programme("channel", "Old guide", "", now, now + 60_000L)
+        val replacement = Programme("channel", "Replacement", "", now, now + 60_000L)
+        store.beginProgrammeImport(accountId)!!.apply {
+            write(listOf(oldProgramme))
+            commit()
+        }
+        val replacementSession = store.beginProgrammeImport(accountId)!!
+        replacementSession.write(listOf(replacement))
+
+        assertEquals(listOf(oldProgramme), store.programmes(accountId, "channel", now, now + 60_000L).first())
+
+        replacementSession.commit()
+
+        assertEquals(listOf(replacement), store.programmes(accountId, "channel", now, now + 60_000L).first())
     }
 }

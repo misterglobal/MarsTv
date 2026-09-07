@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -74,6 +75,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
     private var catalogJob: Job? = null
+    private var catalogJobAccountId: String? = null
     private var catalogStartedAtElapsedMs = 0L
     private val _uiState = MutableStateFlow(MarsUiState())
     val uiState: StateFlow<MarsUiState> = _uiState.asStateFlow()
@@ -138,6 +140,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 password = password,
                 m3uUrl = normalizeUrl(m3uUrl),
             )
+            catalogJobAccountId = account.id
 
             var accountPublished = false
             runCatching {
@@ -208,6 +211,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         if (!force && _uiState.value.loadedCatalogAccountId == account.id) return
         catalogJob?.cancel()
         catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        catalogJobAccountId = account.id
         Log.i(BENCHMARK_TAG, "catalog_start mode=${if (force) "refresh" else "load"} source=${account.sourceType}")
         catalogJob = viewModelScope.launch {
             _uiState.update {
@@ -291,8 +295,24 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun removeAccount(accountId: String) {
         viewModelScope.launch {
+            if (catalogJobAccountId == accountId) {
+                val job = catalogJob
+                job?.cancelAndJoin()
+                if (catalogJob === job) {
+                    catalogJob = null
+                    catalogJobAccountId = null
+                }
+            }
             repository.clearStoredCatalog(accountId)
             stateStore.removeAccount(accountId)
+            _uiState.update {
+                it.copy(
+                    loadedCatalogAccountId = if (it.loadedCatalogAccountId == accountId) null else it.loadedCatalogAccountId,
+                    isLoading = false,
+                    isCatalogLoading = false,
+                    isConnecting = false,
+                )
+            }
         }
     }
 
