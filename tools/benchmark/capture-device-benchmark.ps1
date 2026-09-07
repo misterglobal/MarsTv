@@ -3,7 +3,8 @@ param(
     [string]$Serial,
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "results"),
     [ValidateRange(1, 30)]
-    [int]$IntervalSeconds = 1
+    [int]$IntervalSeconds = 5,
+    [switch]$PreserveLogcat
 )
 
 $absoluteOutput = [System.IO.Path]::GetFullPath($OutputDirectory)
@@ -38,7 +39,9 @@ if ([string]::IsNullOrWhiteSpace($memTotal)) { throw "Unable to read MemTotal fr
     "data_free=$((Invoke-DeviceAdb @('shell', 'df', '-k', '/data') | Out-String).Trim())"
 ) | Set-Content -LiteralPath $metadataPath -Encoding utf8
 
-Invoke-DeviceAdb @('logcat', '-c') | Out-Null
+if (!$PreserveLogcat) {
+    Invoke-DeviceAdb @('logcat', '-c') | Out-Null
+}
 Write-Host "Capturing once every $IntervalSeconds second(s). Press Ctrl+C after import and settled-memory checks."
 Write-Host "Output: $absoluteOutput"
 

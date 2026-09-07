@@ -96,9 +96,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 val activeId = _uiState.value.activeAccount?.id
-                val activeImportAlreadyVisible = _uiState.value.isCatalogLoading &&
-                    _uiState.value.loadedCatalogAccountId == activeId
-                if (activeId != null && !activeImportAlreadyVisible &&
+                if (activeId != null && catalogJob?.isActive != true &&
                     ((activeId != previousAccount) || (_uiState.value.loadedCatalogAccountId != activeId))
                 ) {
                     loadActiveAccount()
@@ -178,6 +176,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     if (!accountPublished) stateStore.addAccount(account)
                 }
                 .onFailure { error ->
+                    if (error is CancellationException) {
+                        Log.i(BENCHMARK_TAG, "catalog_interrupted reason=canceled")
+                        return@onFailure
+                    }
                     if (accountPublished) {
                         stateStore.removeAccount(account.id)
                         _uiState.update {
@@ -188,7 +190,6 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                             )
                         }
                     }
-                    if (error is CancellationException) return@onFailure
                     _uiState.update {
                         it.copy(
                             loadedCatalogAccountId = if (it.loadedCatalogAccountId == account.id) null else it.loadedCatalogAccountId,

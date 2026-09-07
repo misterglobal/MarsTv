@@ -1,6 +1,8 @@
 package tv.mars.app.data.network
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -26,6 +28,7 @@ data class NetworkPayload(
 class NetworkClient {
     companion object {
         const val USER_AGENT = "TiviMate/4.7.0 (Linux; Android 11)"
+        private const val STREAM_ATTEMPTS = 2
     }
 
     private val trustAllCerts = object : X509TrustManager {
@@ -52,25 +55,18 @@ class NetworkClient {
     suspend fun getText(url: String): String = get(url).bytes.toString(Charsets.UTF_8)
 
     suspend fun getStream(url: String, block: suspend (java.io.InputStream) -> Unit) = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", "*/*")
-            .header("Connection", "keep-alive")
-            .header("Accept-Language", "en-US,en;q=0.9")
-            .build()
-
-        client.newCall(request).awaitResponse().use { response ->
-            if (!response.isSuccessful) {
-                val message = when (response.code) {
-                    884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
-                    451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
-                    403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
-                    else -> "Source returned HTTP ${response.code}"
+        repeat(STREAM_ATTEMPTS) { attempt ->
+            try {
+                val request = streamRequest(url)
+                client.newCall(request).awaitResponse().use { response ->
+                    if (!response.isSuccessful) throw HttpResponseException(responseError(response.code))
+                    block(response.body.byteStream())
                 }
-                throw IOException(message)
+                return@withContext
+            } catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                if (error is HttpResponseException || attempt == STREAM_ATTEMPTS - 1) throw error
             }
-            block(response.body.byteStream())
         }
     }
 
@@ -85,13 +81,7 @@ class NetworkClient {
 
         client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
-                val message = when (response.code) {
-                    884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
-                    451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
-                    403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
-                    else -> "Source returned HTTP ${response.code}"
-                }
-                throw IOException(message)
+                throw HttpResponseException(responseError(response.code))
             }
             NetworkPayload(
                 bytes = response.body.bytes(),
@@ -113,4 +103,22 @@ class NetworkClient {
             }
         })
     }
+
+    private fun streamRequest(url: String): Request = Request.Builder()
+        .url(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "*/*")
+        .header("Connection", "keep-alive")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .build()
+
+    private fun responseError(code: Int): String = when (code) {
+        884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
+        451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
+        403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
+        else -> "Source returned HTTP $code"
+    }
+
+    private class HttpResponseException(message: String) : IOException(message)
+
 }
