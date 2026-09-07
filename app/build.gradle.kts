@@ -27,6 +27,19 @@ val escapedPrivatePortalUrl = privatePortalUrl
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+val releaseSigningFile = rootProject.file("keystore.properties")
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningFile.exists()) releaseSigningFile.inputStream().use(::load)
+}
+val requiredSigningKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+if (releaseSigningFile.exists()) {
+    val missingSigningKeys = requiredSigningKeys.filterNot(releaseSigningProperties::containsKey)
+    require(missingSigningKeys.isEmpty()) {
+        "keystore.properties is missing: ${missingSigningKeys.joinToString()}"
+    }
+}
+val releaseSigningConfigured = releaseSigningFile.exists()
+
 android {
     namespace = "tv.mars.app"
     compileSdk = 36
@@ -42,14 +55,31 @@ android {
         buildConfigField("String", "PRIVATE_PORTAL_URL", "\"$escapedPrivatePortalUrl\"")
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("production") {
+                storeFile = rootProject.file(releaseSigningProperties.getProperty("storeFile"))
+                storePassword = releaseSigningProperties.getProperty("storePassword")
+                keyAlias = releaseSigningProperties.getProperty("keyAlias")
+                keyPassword = releaseSigningProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("production")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 

@@ -55,6 +55,20 @@ Run at least three cold imports. Record the worst passing result, not only the f
 
 `dumpsys meminfo` is sampled evidence, not a forced-GC mechanism. Use Android Studio's Memory Profiler or benchmark-only instrumentation for the final Java/Kotlin heap and forced-GC readings.
 
+For repeatable forced-GC evidence, build and install the minified benchmark variant. It is
+release-equivalent except that it uses the debug key and contains a benchmark-only
+GC receiver that is absent from production builds:
+
+```powershell
+.\gradlew.bat :app:assembleBenchmark
+adb install -r .\app\build\outputs\apk\benchmark\app-benchmark.apk
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\benchmark\capture-forced-gc.ps1 -Serial <serial> -OutputPath .\tools\benchmark\results\android-tv-2gb-forced-gc.txt
+```
+
+Run the capture with the completed 100,000-entry catalog open. The reported `javaUsedBytes` and
+`dalvikPssKiB` must both remain below the 128 MiB settled-heap limit. The script also preserves
+the complete before-and-after `dumpsys meminfo` readings.
+
 ## Latest reference runs
 
 On 2026-09-07, the minified release benchmark build completed three cold runs on the 2 GB
@@ -67,8 +81,25 @@ Android 11 x86 TV emulator through an ADB reverse tunnel. The worst passing meas
 - Peak total process PSS: 78,295 KiB; settled total process PSS: 60,667 KiB.
 - No crash, ANR, process restart, or `largeHeap` flag.
 
-The three-run timing and sampled-memory gate passes. Final forced-GC evidence, production
-signing, and release-over-release installation evidence remain required.
+The three-run timing and sampled-memory gate passes.
+
+## Final release-gate evidence
+
+On 2026-09-07, the completed 100,000-entry catalog was measured with the benchmark-only forced-GC
+instrumentation:
+
+- Runtime Java heap used after forced GC: 9,139,608 bytes (8.7 MiB).
+- Dalvik PSS reported by the forced-GC event: 7,604 KiB.
+- Total process PSS reported by the forced-GC event: 71,730 KiB.
+- Immediate post-event `dumpsys` Java heap PSS: 8,772 KiB; total PSS: 73,015 KiB.
+- Result: pass against the 128 MiB settled Java/Kotlin heap limit.
+
+The production release was signed with the same MadeOnMars certificate as the historical APK
+(SHA-256 `4cd75267a92245349c924b7f02a5396413d7fa3baf0cdb89f3e5a552cbdea54b`). An emulator
+release-over-release test installed the historical APK and then installed the new APK with
+`adb install -r`; both installs succeeded, the original installation timestamp was preserved,
+and the package update timestamp advanced. Production signing, upgrade compatibility, and the
+forced-GC memory gate therefore pass.
 
 ## Real-provider stress reference
 
