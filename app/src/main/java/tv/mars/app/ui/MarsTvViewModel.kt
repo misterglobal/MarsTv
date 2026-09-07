@@ -1,8 +1,15 @@
 package tv.mars.app.ui
 
 import android.app.Application
+import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingData
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,7 +17,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tv.mars.app.BuildConfig
-import tv.mars.app.core.CatalogBundle
+import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
 import tv.mars.app.core.ContentKind
 import tv.mars.app.core.Episode
@@ -26,17 +33,20 @@ import tv.mars.app.core.SourceType
 import tv.mars.app.core.ViewerProfile
 import tv.mars.app.core.WatchRecord
 import tv.mars.app.data.local.SecureStateStore
+import tv.mars.app.data.local.MarsTvDatabase
+import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
-import java.util.concurrent.ConcurrentHashMap
 
 data class MarsUiState(
     val local: LocalState = LocalState(),
-    val catalog: CatalogBundle = CatalogBundle.empty(),
+    val loadedCatalogAccountId: String? = null,
+    val catalogRevision: Long = 0L,
     val destination: MainDestination = MainDestination.LIVE,
     val overlay: OverlayScreen = OverlayScreen.NONE,
     val selectedSeries: SeriesDetails? = null,
     val playerRequest: PlayerRequest? = null,
     val isLoading: Boolean = false,
+    val isCatalogLoading: Boolean = false,
     val isConnecting: Boolean = false,
     val hasLoadedState: Boolean = false,
     val errorMessage: String? = null,
@@ -62,8 +72,11 @@ data class MarsUiState(
 class MarsTvViewModel(application: Application) : AndroidViewModel(application) {
     private val stateStore = SecureStateStore(application)
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
-    private val repository = IptvRepository()
-    private val catalogCache = ConcurrentHashMap<String, CatalogBundle>()
+    private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
+    private val repository = IptvRepository(catalogPersistence, roomCatalog)
+    private var catalogJob: Job? = null
+    private var catalogJobAccountId: String? = null
+    private var catalogStartedAtElapsedMs = 0L
     private val _uiState = MutableStateFlow(MarsUiState())
     val uiState: StateFlow<MarsUiState> = _uiState.asStateFlow()
 
@@ -85,7 +98,9 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
                 val activeId = _uiState.value.activeAccount?.id
-                if (activeId != null && (activeId != previousAccount || _uiState.value.catalog.accountId != activeId)) {
+                if (activeId != null && catalogJob?.isActive != true &&
+                    ((activeId != previousAccount) || (_uiState.value.loadedCatalogAccountId != activeId))
+                ) {
                     loadActiveAccount()
                 }
             }
@@ -101,8 +116,11 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         m3uUrl: String,
     ) {
         if (_uiState.value.isConnecting) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isConnecting = true, errorMessage = null) }
+        catalogJob?.cancel()
+        catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
+        catalogJob = viewModelScope.launch {
+            _uiState.update { it.copy(isConnecting = true, isCatalogLoading = true, errorMessage = null) }
             val resolvedServer = if (sourceType == SourceType.PRIVATE_XTREAM) {
                 BuildConfig.PRIVATE_PORTAL_URL
             } else {
@@ -122,26 +140,65 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 password = password,
                 m3uUrl = normalizeUrl(m3uUrl),
             )
+            catalogJobAccountId = account.id
 
-            releaseCatalogBeforeLoad(account.id)
-            runCatching { repository.loadCatalog(account) }
-                .onSuccess { catalog ->
-                    catalogCache[account.id] = catalog
-                    catalogPersistence.save(catalog)
+            var accountPublished = false
+            runCatching {
+                repository.refreshCatalog(account) { previewRevision ->
+                    val publishAccount = !accountPublished
+                    if (publishAccount) {
+                        accountPublished = true
+                        Log.i(
+                            BENCHMARK_TAG,
+                            "catalog_first_usable durationMs=${SystemClock.elapsedRealtime() - catalogStartedAtElapsedMs}",
+                        )
+                    }
                     _uiState.update {
                         it.copy(
-                            catalog = catalog,
+                            loadedCatalogAccountId = account.id,
+                            catalogRevision = previewRevision,
                             overlay = OverlayScreen.NONE,
                             isConnecting = false,
+                            isCatalogLoading = true,
+                        )
+                    }
+                    if (publishAccount) stateStore.addAccount(account)
+                }
+            }
+                .onSuccess { revision ->
+                    logCatalogCompleted()
+                    _uiState.update {
+                        it.copy(
+                            loadedCatalogAccountId = account.id,
+                            catalogRevision = revision,
+                            overlay = OverlayScreen.NONE,
+                            isConnecting = false,
+                            isCatalogLoading = false,
                             errorMessage = null,
                         )
                     }
-                    stateStore.addAccount(account)
+                    if (!accountPublished) stateStore.addAccount(account)
                 }
                 .onFailure { error ->
+                    if (error is CancellationException) {
+                        Log.i(BENCHMARK_TAG, "catalog_interrupted reason=canceled")
+                        return@onFailure
+                    }
+                    if (accountPublished) {
+                        stateStore.removeAccount(account.id)
+                        _uiState.update {
+                            it.copy(
+                                loadedCatalogAccountId = if (it.loadedCatalogAccountId == account.id) null else it.loadedCatalogAccountId,
+                                isConnecting = false,
+                                isCatalogLoading = false,
+                            )
+                        }
+                    }
                     _uiState.update {
                         it.copy(
+                            loadedCatalogAccountId = if (it.loadedCatalogAccountId == account.id) null else it.loadedCatalogAccountId,
                             isConnecting = false,
+                            isCatalogLoading = false,
                             errorMessage = error.message?.take(240) ?: "Could not connect to this source",
                         )
                     }
@@ -151,50 +208,76 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun loadActiveAccount(force: Boolean = false) {
         val account = _uiState.value.activeAccount ?: return
-
-        // Keep only the active account in memory to prevent OOM on large playlists
-        val otherAccountIds = catalogCache.keys.filter { it != account.id }
-        otherAccountIds.forEach {
-            catalogCache.remove(it)
-            repository.clearCache(it)
-        }
-
-        if (force) releaseCatalogBeforeLoad(account.id)
-
-        val cached = catalogCache[account.id]
-        if (!force && cached != null) {
-            _uiState.update { it.copy(catalog = cached, isLoading = false, errorMessage = null) }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+        if (!force && _uiState.value.loadedCatalogAccountId == account.id) return
+        catalogJob?.cancel()
+        catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
+        catalogJobAccountId = account.id
+        Log.i(BENCHMARK_TAG, "catalog_start mode=${if (force) "refresh" else "load"} source=${account.sourceType}")
+        catalogJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null, selectedSeries = null)
+            }
             
             if (!force) {
-                val persisted = catalogPersistence.load(account.id)
-                if (persisted != null) {
-                    val dayMs = 24 * 60 * 60 * 1000L
-                    if (System.currentTimeMillis() - persisted.loadedAt < dayMs) {
-                        catalogCache[account.id] = persisted
-                        _uiState.update { it.copy(catalog = persisted, isLoading = false) }
-                        return@launch
+                val dayMs = 24 * 60 * 60 * 1000L
+                val roomLoadedAt = repository.catalogLoadedAt(account.id)
+                if (roomLoadedAt != null && System.currentTimeMillis() - roomLoadedAt < dayMs) {
+                    _uiState.update {
+                        it.copy(
+                            loadedCatalogAccountId = account.id,
+                            catalogRevision = roomLoadedAt,
+                            isLoading = false,
+                            isCatalogLoading = false,
+                        )
+                    }
+                    return@launch
+                }
+                if (roomLoadedAt == null) {
+                    val persisted = catalogPersistence.load(account.id)
+                    if (persisted != null && System.currentTimeMillis() - persisted.loadedAt < dayMs) {
+                        runCatching { repository.seedRoomFromLegacyCache(persisted) }
+                            .onFailure {
+                                _uiState.update { state ->
+                                    state.copy(errorMessage = "Refresh this account to finish updating its catalog storage")
+                                }
+                            }
+                            .onSuccess {
+                                catalogPersistence.clear(account.id)
+                                _uiState.update {
+                                    it.copy(
+                                        loadedCatalogAccountId = account.id,
+                                        catalogRevision = persisted.loadedAt,
+                                        isLoading = false,
+                                        isCatalogLoading = false,
+                                    )
+                                }
+                                return@launch
+                            }
                     }
                 }
             }
 
-            // Do not hold an expired catalog while constructing its replacement.
-            releaseCatalogBeforeLoad(account.id)
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            _uiState.update { it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null) }
 
-            runCatching { repository.loadCatalog(account) }
-                .onSuccess { catalog ->
-                    catalogCache[account.id] = catalog
-                    catalogPersistence.save(catalog)
-                    _uiState.update { it.copy(catalog = catalog, isLoading = false) }
+            runCatching { repository.refreshCatalog(account) }
+                .onSuccess { revision ->
+                    logCatalogCompleted()
+                    catalogPersistence.clear(account.id)
+                    _uiState.update {
+                        it.copy(
+                            loadedCatalogAccountId = account.id,
+                            catalogRevision = revision,
+                            isLoading = false,
+                            isCatalogLoading = false,
+                        )
+                    }
                 }
                 .onFailure { error ->
+                    if (error is CancellationException) return@onFailure
                     _uiState.update {
                         it.copy(
                             isLoading = false,
+                            isCatalogLoading = false,
                             errorMessage = error.message?.take(240) ?: "Could not refresh this account",
                         )
                     }
@@ -202,18 +285,71 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun logCatalogCompleted() {
+        Log.i(BENCHMARK_TAG, "catalog_complete durationMs=${SystemClock.elapsedRealtime() - catalogStartedAtElapsedMs}")
+    }
+
     fun selectAccount(accountId: String) {
         viewModelScope.launch { stateStore.setActiveAccount(accountId) }
     }
 
     fun removeAccount(accountId: String) {
-        catalogCache.remove(accountId)
-        repository.clearCache(accountId)
         viewModelScope.launch {
-            catalogPersistence.clear(accountId)
+            if (catalogJobAccountId == accountId) {
+                val job = catalogJob
+                job?.cancelAndJoin()
+                if (catalogJob === job) {
+                    catalogJob = null
+                    catalogJobAccountId = null
+                }
+            }
+            repository.clearStoredCatalog(accountId)
             stateStore.removeAccount(accountId)
+            _uiState.update {
+                it.copy(
+                    loadedCatalogAccountId = if (it.loadedCatalogAccountId == accountId) null else it.loadedCatalogAccountId,
+                    isLoading = false,
+                    isCatalogLoading = false,
+                    isConnecting = false,
+                )
+            }
         }
     }
+
+    fun observeCategories(accountId: String, kind: ContentKind): Flow<List<tv.mars.app.core.Category>> =
+        repository.observeCategories(accountId, kind)
+
+    fun pagedMedia(
+        accountId: String,
+        kind: ContentKind,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<MediaContent>> = repository.pagedMedia(accountId, kind, categoryKey, blockedCategoryKeys)
+
+    fun pagedChannels(
+        accountId: String,
+        categoryKey: String?,
+        blockedCategoryKeys: Set<String>,
+    ): Flow<PagingData<Channel>> = repository.pagedChannels(accountId, categoryKey, blockedCategoryKeys)
+
+    fun programmes(
+        accountId: String,
+        channelEpgId: String,
+        windowStart: Long,
+        windowEnd: Long,
+    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd)
+
+    suspend fun searchCatalog(
+        accountId: String,
+        query: String,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = repository.searchCatalog(accountId, query, blockedCategoryKeys)
+
+    suspend fun favouriteCatalog(
+        accountId: String,
+        favouriteKeys: Set<String>,
+        blockedCategoryKeys: Set<String>,
+    ): CatalogLookup = repository.favouriteCatalog(accountId, favouriteKeys, blockedCategoryKeys)
 
     fun setDestination(destination: MainDestination) {
         _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }
@@ -234,12 +370,15 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun playChannel(channel: Channel) = openPlayer(repository.liveRequest(channel))
+    fun playChannel(channel: Channel) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
+        openPlayer(repository.liveRequest(account, channel))
+    }
 
     fun playProgramme(channel: Channel, programme: Programme) {
-        val account = _uiState.value.activeAccount ?: return
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
         val request = when {
-            programme.isLive -> repository.liveRequest(channel)
+            programme.isLive -> repository.liveRequest(account, channel)
             programme.isPast -> repository.catchUpRequest(account, channel, programme)
             else -> null
         }
@@ -247,6 +386,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openMedia(media: MediaContent) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == media.accountId } ?: return
         if (media.kind != ContentKind.SERIES || media.seriesId.isBlank()) {
             if (media.playbackUrl.isNotBlank()) {
                 val resume = _uiState.value.watchHistory.firstOrNull { it.contentKey == media.key }?.positionMs ?: 0L
@@ -255,7 +395,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         contentKey = media.key,
                         accountId = media.accountId,
                         title = media.title,
-                        url = media.playbackUrl,
+                        url = repository.playbackUrl(account, media.playbackUrl),
                         kind = media.kind,
                         artworkUrl = media.artworkUrl,
                         resumePositionMs = resume,
@@ -265,7 +405,6 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        val account = _uiState.value.activeAccount ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             runCatching { repository.loadSeriesDetails(account, media) }
@@ -285,13 +424,14 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun playEpisode(episode: Episode) {
+        val account = _uiState.value.local.accounts.firstOrNull { it.id == episode.accountId } ?: return
         val resume = _uiState.value.watchHistory.firstOrNull { it.contentKey == episode.key }?.positionMs ?: 0L
         openPlayer(
             PlayerRequest(
                 contentKey = episode.key,
                 accountId = episode.accountId,
                 title = episode.title,
-                url = episode.playbackUrl,
+                url = repository.playbackUrl(account, episode.playbackUrl),
                 kind = ContentKind.EPISODE,
                 artworkUrl = episode.artworkUrl,
                 resumePositionMs = resume,
@@ -394,26 +534,6 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { stateStore.clearHistory(profileId) }
     }
 
-    fun clearHiddenCaches() {
-        val activeId = _uiState.value.activeAccount?.id
-        val otherAccountIds = catalogCache.keys.filter { it != activeId }
-        otherAccountIds.forEach {
-            catalogCache.remove(it)
-            repository.clearCache(it)
-        }
-    }
-
-    private fun releaseCatalogBeforeLoad(accountId: String) {
-        catalogCache.remove(accountId)
-        repository.clearCache(accountId)
-        _uiState.update { state ->
-            if (state.catalog.accountId.isBlank()) state else state.copy(
-                catalog = CatalogBundle.empty(accountId),
-                selectedSeries = null,
-            )
-        }
-    }
-
     private fun openPlayer(request: PlayerRequest) {
         _uiState.update { it.copy(playerRequest = request, overlay = OverlayScreen.PLAYER) }
     }
@@ -426,5 +546,9 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             "http://$trimmed"
         }
+    }
+
+    private companion object {
+        const val BENCHMARK_TAG = "MarsCatalogMetrics"
     }
 }

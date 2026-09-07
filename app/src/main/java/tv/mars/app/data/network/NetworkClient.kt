@@ -1,10 +1,16 @@
 package tv.mars.app.data.network
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -22,6 +28,7 @@ data class NetworkPayload(
 class NetworkClient {
     companion object {
         const val USER_AGENT = "TiviMate/4.7.0 (Linux; Android 11)"
+        private const val STREAM_ATTEMPTS = 2
     }
 
     private val trustAllCerts = object : X509TrustManager {
@@ -47,26 +54,24 @@ class NetworkClient {
 
     suspend fun getText(url: String): String = get(url).bytes.toString(Charsets.UTF_8)
 
-    suspend fun getStream(url: String, block: suspend (java.io.InputStream) -> Unit) = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", "*/*")
-            .header("Connection", "keep-alive")
-            .header("Accept-Language", "en-US,en;q=0.9")
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                val message = when (response.code) {
-                    884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
-                    451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
-                    403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
-                    else -> "Source returned HTTP ${response.code}"
+    suspend fun getStream(
+        url: String,
+        retryOnFailure: Boolean = true,
+        block: suspend (java.io.InputStream) -> Unit,
+    ) = withContext(Dispatchers.IO) {
+        val attempts = if (retryOnFailure) STREAM_ATTEMPTS else 1
+        repeat(attempts) { attempt ->
+            try {
+                val request = streamRequest(url)
+                client.newCall(request).awaitResponse().use { response ->
+                    if (!response.isSuccessful) throw HttpResponseException(responseError(response.code))
+                    block(response.body.byteStream())
                 }
-                throw IOException(message)
+                return@withContext
+            } catch (error: IOException) {
+                currentCoroutineContext().ensureActive()
+                if (error is HttpResponseException || attempt == attempts - 1) throw error
             }
-            block(response.body.byteStream())
         }
     }
 
@@ -79,15 +84,9 @@ class NetworkClient {
             .header("Accept-Language", "en-US,en;q=0.9")
             .build()
 
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
-                val message = when (response.code) {
-                    884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
-                    451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
-                    403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
-                    else -> "Source returned HTTP ${response.code}"
-                }
-                throw IOException(message)
+                throw HttpResponseException(responseError(response.code))
             }
             NetworkPayload(
                 bytes = response.body.bytes(),
@@ -96,4 +95,35 @@ class NetworkClient {
             )
         }
     }
+
+    private suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+        continuation.invokeOnCancellation { cancel() }
+        enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                continuation.resumeWith(Result.failure(e))
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                continuation.resume(response) { _, cancelledResponse, _ -> cancelledResponse.close() }
+            }
+        })
+    }
+
+    private fun streamRequest(url: String): Request = Request.Builder()
+        .url(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "*/*")
+        .header("Connection", "keep-alive")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .build()
+
+    private fun responseError(code: Int): String = when (code) {
+        884 -> "Account restriction: The provider has blocked M3U access or connection limits reached (Error 884)."
+        451 -> "Unavailable for legal reasons: Access to this source is blocked in your region or by your ISP."
+        403 -> "Access forbidden: Check your credentials or if your IP is whitelisted."
+        else -> "Source returned HTTP $code"
+    }
+
+    private class HttpResponseException(message: String) : IOException(message)
+
 }

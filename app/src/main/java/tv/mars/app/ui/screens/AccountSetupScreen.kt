@@ -66,7 +66,8 @@ fun AccountSetupScreen(
     var m3uUrl by rememberSaveable { mutableStateOf("") }
     var showPassword by rememberSaveable { mutableStateOf(false) }
 
-    if (onCancel != null) BackHandler(onBack = onCancel)
+    if (isConnecting) BackHandler(onBack = {})
+    else if (onCancel != null) BackHandler(onBack = onCancel)
 
     val valid = when (method) {
         SourceType.PRIVATE_XTREAM -> privatePortalConfigured && username.isNotBlank() && password.isNotBlank()
@@ -287,7 +288,7 @@ private fun AccountForm(
         ErrorBanner(message = errorMessage, onDismiss = onClearError)
         Spacer(Modifier.height(14.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            if (onCancel != null) {
+            if (!isConnecting && onCancel != null) {
                 MarsButton(text = "Cancel", onClick = onCancel, modifier = Modifier.weight(0.55f))
             }
             MarsButton(

@@ -22,9 +22,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.PagingData
+import androidx.paging.compose.collectAsLazyPagingItems
+import kotlinx.coroutines.flow.Flow
 import tv.mars.app.core.Category
 import tv.mars.app.core.Episode
 import tv.mars.app.core.MediaContent
@@ -55,10 +62,12 @@ import tv.mars.app.ui.theme.MarsWhite
 
 @Composable
 fun MediaCatalogScreen(
+    accountId: String,
     title: String,
     subtitle: String,
-    categories: List<Category>,
-    content: List<MediaContent>,
+    categoriesSource: () -> Flow<List<Category>>,
+    contentSource: (categoryKey: String?, blockedCategoryKeys: Set<String>) -> Flow<PagingData<MediaContent>>,
+    blockedCategoryKeys: Set<String>,
     favouriteKeys: Set<String>,
     isTelevision: Boolean,
     profileHasPin: Boolean,
@@ -70,10 +79,15 @@ fun MediaCatalogScreen(
     onToggleFavourite: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedCategory by remember(content) { mutableStateOf<String?>(null) }
+    val categories by remember(accountId) { categoriesSource() }.collectAsStateWithLifecycle(emptyList())
+    var selectedCategory by remember(accountId) { mutableStateOf<String?>(null) }
     var pendingUnlock by remember { mutableStateOf<Category?>(null) }
-    val visible = content.filter {
-        !isCategoryLocked(it.categoryKey) && (selectedCategory == null || it.categoryKey == selectedCategory)
+    val content = remember(accountId, selectedCategory, blockedCategoryKeys) {
+        contentSource(selectedCategory, blockedCategoryKeys)
+    }.collectAsLazyPagingItems()
+
+    LaunchedEffect(categories, selectedCategory) {
+        if (selectedCategory != null && categories.none { it.key == selectedCategory }) selectedCategory = null
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -99,25 +113,48 @@ fun MediaCatalogScreen(
         }
         Spacer(Modifier.height(14.dp))
 
-        if (visible.isEmpty()) {
-            EmptyState("Nothing here yet", "This source did not return items for the selected category.")
-        } else {
+        when {
+            content.loadState.refresh is LoadState.Loading && content.itemCount == 0 -> {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = MarsRed)
+                }
+            }
+            content.loadState.refresh is LoadState.Error && content.itemCount == 0 -> {
+                EmptyState("Could not load catalog", "Refresh this account or try again.")
+            }
+            content.itemCount == 0 -> {
+                EmptyState("Nothing here yet", "This source did not return items for the selected category.")
+            }
+            else -> {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(if (isTelevision) 174.dp else 142.dp),
                 modifier = Modifier.fillMaxSize(),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp),
             ) {
-                items(visible, key = MediaContent::key) { item ->
-                    PosterCard(
-                        item = item,
-                        favourite = item.key in favouriteKeys,
-                        isTelevision = isTelevision,
-                        onClick = { onOpen(item) },
-                        onFavourite = { onToggleFavourite(item.key) },
-                    )
+                items(
+                    count = content.itemCount,
+                    key = { index -> content.peek(index)?.key ?: "catalog-placeholder-$index" },
+                ) { index ->
+                    content[index]?.let { item ->
+                        PosterCard(
+                            item = item,
+                            favourite = item.key in favouriteKeys,
+                            isTelevision = isTelevision,
+                            onClick = { onOpen(item) },
+                            onFavourite = { onToggleFavourite(item.key) },
+                        )
+                    }
+                }
+                if (content.loadState.append is LoadState.Loading) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = MarsRed)
+                        }
+                    }
                 }
                 item { Spacer(Modifier.height(28.dp)) }
+            }
             }
         }
     }

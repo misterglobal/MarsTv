@@ -58,6 +58,38 @@ class CatalogPersistence(context: Context) {
     suspend fun clear(accountId: String) {
         withContext(Dispatchers.IO) {
             File(cacheDir, "$accountId.json.gz").delete()
+            File(cacheDir, "$accountId.episodes.json.gz").delete()
         }
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    suspend fun saveEpisodes(accountId: String, episodes: Map<String, List<tv.mars.app.core.Episode>>) {
+        withContext(Dispatchers.IO) {
+            val file = File(cacheDir, "$accountId.episodes.json.gz")
+            val tempFile = File(cacheDir, "$accountId.episodes.json.gz.tmp")
+            
+            runCatching {
+                tempFile.outputStream().use { fos ->
+                    GZIPOutputStream(fos).use { gzip ->
+                        json.encodeToStream(episodes, gzip)
+                    }
+                }
+                tempFile.renameTo(file)
+            }
+        }
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    suspend fun loadEpisodes(accountId: String): Map<String, List<tv.mars.app.core.Episode>>? = withContext(Dispatchers.IO) {
+        val file = File(cacheDir, "$accountId.episodes.json.gz")
+        if (!file.exists()) return@withContext null
+        
+        runCatching {
+            file.inputStream().use { fis ->
+                GZIPInputStream(fis).use { gzip ->
+                    json.decodeFromStream<Map<String, List<tv.mars.app.core.Episode>>>(gzip)
+                }
+            }
+        }.getOrNull()
     }
 }

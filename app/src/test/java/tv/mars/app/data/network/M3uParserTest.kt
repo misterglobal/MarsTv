@@ -1,11 +1,14 @@
 package tv.mars.app.data.network
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tv.mars.app.core.IptvAccount
 import tv.mars.app.core.SourceType
+import java.nio.file.Files
 
 class M3uParserTest {
     private val account = IptvAccount(
@@ -16,7 +19,7 @@ class M3uParserTest {
     )
 
     @Test
-    fun parsesStreamWithoutDuplicatingCategoryStringsAndGroupsEpisodes() {
+    fun parsesStreamWithoutDuplicatingCategoryStringsAndGroupsEpisodes() = runBlocking {
         val playlist = """
             #EXTM3U x-tvg-url="guide.xml.gz"
             #EXTINF:-1 tvg-id="news-one" group-title="News",News One
@@ -36,13 +39,13 @@ class M3uParserTest {
         assertEquals(1, result.liveCategories.size)
         assertSame(result.channels[0].categoryKey, result.channels[1].categoryKey)
         assertSame(result.channels[0].categoryName, result.channels[1].categoryName)
-        assertEquals(listOf(1, 2), result.seriesDetails.values.single().episodesBySeason[1]?.map { it.episodeNumber })
+        assertEquals(listOf(1, 2), result.episodesBySeriesId.values.single().map { it.episodeNumber })
         assertEquals(4, result.stats.totalEntries)
         assertEquals(0, result.stats.unclassifiedEntries)
     }
 
     @Test
-    fun classifiesGenericVodFilesAndNormalizesEquivalentCategoryNames() {
+    fun classifiesGenericVodFilesAndNormalizesEquivalentCategoryNames() = runBlocking {
         val playlist = """
             #EXTM3U
             #EXTINF:-1 group-title="|EN| ✪  CLASSIC   4K",Classic One
@@ -64,7 +67,7 @@ class M3uParserTest {
     }
 
     @Test
-    fun recognizesSpacedEpisodeNamesBeforeVodFileExtensions() {
+    fun recognizesSpacedEpisodeNamesBeforeVodFileExtensions() = runBlocking {
         val playlist = """
             #EXTM3U
             #EXTINF:-1 group-title="Drama",Example Show S01 - E02
@@ -79,7 +82,7 @@ class M3uParserTest {
     }
 
     @Test
-    fun normalizesCanonicallyEquivalentUnicodeCategoryKeys() {
+    fun normalizesCanonicallyEquivalentUnicodeCategoryKeys() = runBlocking {
         val composedGroup = "Caf\u00e9"
         val decomposedGroup = "Cafe\u0301"
         val playlist = """
@@ -95,5 +98,72 @@ class M3uParserTest {
         assertEquals(1, result.movieCategories.size)
         assertSame(result.movies[0].categoryKey, result.movies[1].categoryKey)
         assertEquals(composedGroup, result.movies[0].categoryName)
+    }
+
+    @Test
+    fun streamsOneHundredThousandEntriesInBoundedBatches() = runBlocking {
+        val fixture = Files.createTempFile("marstv-100k-", ".m3u")
+        try {
+            Files.newBufferedWriter(fixture).use { writer ->
+                writer.appendLine("#EXTM3U")
+                repeat(15_000) { index ->
+                    writer.appendLine("#EXTINF:-1 group-title=\"Live\",Channel $index")
+                    writer.appendLine("https://example.com/live/$index.ts")
+                }
+                repeat(45_000) { index ->
+                    writer.appendLine("#EXTINF:-1 group-title=\"Movies\",Movie $index")
+                    writer.appendLine("https://example.com/movies/$index.mp4")
+                }
+                repeat(40_000) { index ->
+                    val show = index % 1_000
+                    val episode = index / 1_000 + 1
+                    writer.appendLine("#EXTINF:-1 group-title=\"Series\",Show $show S01E$episode")
+                    writer.appendLine("https://example.com/series/$show/$index.mp4")
+                }
+            }
+
+            var batches = 0
+            var rows = 0
+            var largestBatch = 0
+            val result = Files.newInputStream(fixture).use { input ->
+                M3uParser().parseStreaming(account, input) { batch ->
+                    batches++
+                    rows += batch.rowCount
+                    largestBatch = maxOf(largestBatch, batch.rowCount)
+                }
+            }
+
+            assertEquals(100_000, result.stats.totalEntries)
+            assertEquals(15_000, result.stats.liveEntries)
+            assertEquals(45_000, result.stats.movieEntries)
+            assertEquals(40_000, result.stats.seriesEpisodes)
+            assertTrue(batches > 1)
+            assertEquals(101_003, rows)
+            assertTrue(largestBatch <= M3uParser.MAX_STREAM_BATCH_SIZE)
+        } finally {
+            Files.deleteIfExists(fixture)
+        }
+    }
+
+    @Test
+    fun streamingParserStopsWhenBatchConsumerCancels() = runBlocking {
+        val playlist = buildString {
+            appendLine("#EXTM3U")
+            repeat(2_000) { index ->
+                appendLine("#EXTINF:-1 group-title=\"Live\",Channel $index")
+                appendLine("https://example.com/live/$index.ts")
+            }
+        }
+        var emittedBatches = 0
+
+        try {
+            M3uParser().parseStreaming(account, playlist.byteInputStream(), batchSize = 100) {
+                emittedBatches++
+                throw CancellationException("test cancellation")
+            }
+            throw AssertionError("Expected parsing to be cancelled")
+        } catch (_: CancellationException) {
+            assertEquals(1, emittedBatches)
+        }
     }
 }

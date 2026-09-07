@@ -161,6 +161,11 @@ data class CatalogBundle(
     }
 }
 
+data class CatalogLookup(
+    val channels: List<Channel> = emptyList(),
+    val media: List<MediaContent> = emptyList(),
+)
+
 data class PlayerRequest(
     val contentKey: String,
     val accountId: String,

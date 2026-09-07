@@ -35,6 +35,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tv.mars.app.core.MainDestination
+import tv.mars.app.core.ContentKind
 import tv.mars.app.core.OverlayScreen
 import tv.mars.app.ui.components.ErrorBanner
 import tv.mars.app.ui.components.FocusSurface
@@ -208,9 +210,15 @@ private fun DestinationContent(
 ) {
     val hasPin = !state.activeProfile?.pinHash.isNullOrBlank()
     val openSettings = { viewModel.setDestination(MainDestination.SETTINGS) }
+    val accountId = state.activeAccount?.id.orEmpty()
+    val blockedCategoryKeys = state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
     when (state.destination) {
         MainDestination.LIVE -> LiveGuideScreen(
-            catalog = state.catalog,
+            accountId = accountId,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.LIVE) },
+            channelsSource = { categoryKey, blocked -> viewModel.pagedChannels(accountId, categoryKey, blocked) },
+            programmesSource = { epgId, start, end -> viewModel.programmes(accountId, epgId, start, end) },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             profileHasPin = hasPin,
             isCategoryLocked = viewModel::isCategoryLocked,
@@ -223,10 +231,14 @@ private fun DestinationContent(
             modifier = modifier,
         )
         MainDestination.MOVIES -> MediaCatalogScreen(
+            accountId = accountId,
             title = "Movies",
             subtitle = "On-demand titles from ${state.activeAccount?.name.orEmpty()}",
-            categories = state.catalog.movieCategories,
-            content = state.catalog.movies,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.MOVIE) },
+            contentSource = { categoryKey, blocked ->
+                viewModel.pagedMedia(accountId, ContentKind.MOVIE, categoryKey, blocked)
+            },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             isTelevision = isTelevision,
             profileHasPin = hasPin,
@@ -239,10 +251,14 @@ private fun DestinationContent(
             modifier = modifier,
         )
         MainDestination.SERIES -> MediaCatalogScreen(
+            accountId = accountId,
             title = "Series",
             subtitle = "Browse shows and episodes",
-            categories = state.catalog.seriesCategories,
-            content = state.catalog.series,
+            categoriesSource = { viewModel.observeCategories(accountId, ContentKind.SERIES) },
+            contentSource = { categoryKey, blocked ->
+                viewModel.pagedMedia(accountId, ContentKind.SERIES, categoryKey, blocked)
+            },
+            blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             isTelevision = isTelevision,
             profileHasPin = hasPin,
@@ -255,24 +271,28 @@ private fun DestinationContent(
             modifier = modifier,
         )
         MainDestination.SEARCH -> SearchScreen(
+            accountId = accountId,
+            catalogRevision = state.catalogRevision,
             query = state.searchQuery,
             onQueryChange = viewModel::setSearchQuery,
-            catalog = state.catalog,
+            blockedCategoryKeys = blockedCategoryKeys,
+            searchSource = { query, blocked -> viewModel.searchCatalog(accountId, query, blocked) },
             favouriteKeys = state.favouriteKeys,
             isTelevision = isTelevision,
-            isCategoryLocked = viewModel::isCategoryLocked,
             onPlayChannel = viewModel::playChannel,
             onOpenMedia = viewModel::openMedia,
             onToggleFavourite = viewModel::toggleFavourite,
             modifier = modifier,
         )
         MainDestination.LIBRARY -> LibraryScreen(
-            catalog = state.catalog,
+            accountId = accountId,
+            catalogRevision = state.catalogRevision,
             favouriteKeys = state.favouriteKeys,
+            blockedCategoryKeys = blockedCategoryKeys,
+            favouritesSource = { keys, blocked -> viewModel.favouriteCatalog(accountId, keys, blocked) },
             continueWatching = state.continueWatching,
             history = state.watchHistory,
             isTelevision = isTelevision,
-            isCategoryLocked = viewModel::isCategoryLocked,
             onPlayChannel = viewModel::playChannel,
             onOpenMedia = viewModel::openMedia,
             onPlayHistory = viewModel::playHistory,
@@ -280,22 +300,30 @@ private fun DestinationContent(
             onClearHistory = viewModel::clearHistory,
             modifier = modifier,
         )
-        MainDestination.SETTINGS -> SettingsScreen(
-            accounts = state.local.accounts,
-            activeAccountId = state.activeAccount?.id,
-            profiles = state.local.profiles,
-            activeProfile = state.activeProfile,
-            categories = state.catalog.liveCategories + state.catalog.movieCategories + state.catalog.seriesCategories,
-            pinMatches = viewModel::pinMatches,
-            onSelectAccount = viewModel::selectAccount,
-            onRemoveAccount = viewModel::removeAccount,
-            onAddAccount = viewModel::showAddAccount,
-            onRefresh = { viewModel.loadActiveAccount(force = true) },
-            onOpenProfiles = viewModel::showProfiles,
-            onSetPin = viewModel::setProfilePin,
-            onToggleCategory = viewModel::toggleCategoryRestriction,
-            modifier = modifier,
-        )
+        MainDestination.SETTINGS -> {
+            val liveCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.LIVE) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            val movieCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.MOVIE) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            val seriesCategories by remember(accountId) { viewModel.observeCategories(accountId, ContentKind.SERIES) }
+                .collectAsStateWithLifecycle(initialValue = emptyList())
+            SettingsScreen(
+                accounts = state.local.accounts,
+                activeAccountId = state.activeAccount?.id,
+                profiles = state.local.profiles,
+                activeProfile = state.activeProfile,
+                categories = liveCategories + movieCategories + seriesCategories,
+                pinMatches = viewModel::pinMatches,
+                onSelectAccount = viewModel::selectAccount,
+                onRemoveAccount = viewModel::removeAccount,
+                onAddAccount = viewModel::showAddAccount,
+                onRefresh = { viewModel.loadActiveAccount(force = true) },
+                onOpenProfiles = viewModel::showProfiles,
+                onSetPin = viewModel::setProfilePin,
+                onToggleCategory = viewModel::toggleCategoryRestriction,
+                modifier = modifier,
+            )
+        }
     }
 }
 

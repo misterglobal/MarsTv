@@ -262,13 +262,15 @@ fun LoadingOverlay(visible: Boolean) {
         contentAlignment = Alignment.Center,
     ) {
         Surface(color = MarsSurfaceRaised, shape = RoundedCornerShape(18.dp)) {
-            Row(
+            Column(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MarsRed, strokeWidth = 3.dp)
-                Spacer(Modifier.width(14.dp))
-                Text("Loading your lineup…", color = MarsWhite)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), color = MarsRed, strokeWidth = 3.dp)
+                    Spacer(Modifier.width(14.dp))
+                    Text("Loading your lineup…", color = MarsWhite)
+                }
             }
         }
     }

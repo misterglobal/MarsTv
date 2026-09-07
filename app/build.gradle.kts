@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 kotlin {
@@ -26,6 +27,19 @@ val escapedPrivatePortalUrl = privatePortalUrl
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+val releaseSigningFile = rootProject.file("keystore.properties")
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningFile.exists()) releaseSigningFile.inputStream().use(::load)
+}
+val requiredSigningKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+if (releaseSigningFile.exists()) {
+    val missingSigningKeys = requiredSigningKeys.filterNot(releaseSigningProperties::containsKey)
+    require(missingSigningKeys.isEmpty()) {
+        "keystore.properties is missing: ${missingSigningKeys.joinToString()}"
+    }
+}
+val releaseSigningConfigured = releaseSigningFile.exists()
+
 android {
     namespace = "tv.mars.app"
     compileSdk = 36
@@ -34,20 +48,38 @@ android {
         applicationId = "tv.mars.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "PRIVATE_PORTAL_URL", "\"$escapedPrivatePortalUrl\"")
+    }
+
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("production") {
+                storeFile = rootProject.file(releaseSigningProperties.getProperty("storeFile"))
+                storePassword = releaseSigningProperties.getProperty("storePassword")
+                keyAlias = releaseSigningProperties.getProperty("keyAlias")
+                keyPassword = releaseSigningProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("production")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
 
@@ -92,5 +124,19 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
+    ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.androidx.test.core.ktx)
+    androidTestImplementation(libs.androidx.test.junit.ktx)
+    androidTestImplementation(libs.androidx.test.runner)
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
