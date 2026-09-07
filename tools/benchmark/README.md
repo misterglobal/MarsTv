@@ -94,9 +94,9 @@ instrumentation:
 - Immediate post-event `dumpsys` Java heap PSS: 8,772 KiB; total PSS: 73,015 KiB.
 - Result: pass against the 128 MiB settled Java/Kotlin heap limit.
 
-The production release was signed with the same MadeOnMars certificate as the historical APK
+The `0.2.0` (`versionCode 2`) production release was signed with the same MadeOnMars certificate as the historical `0.1.0` (`versionCode 1`) APK
 (SHA-256 `4cd75267a92245349c924b7f02a5396413d7fa3baf0cdb89f3e5a552cbdea54b`). An emulator
-release-over-release test installed the historical APK and then installed the new APK with
+release-over-release test installed `0.1.0` and then installed `0.2.0` with
 `adb install -r`; both installs succeeded, the original installation timestamp was preserved,
 and the package update timestamp advanced. Production signing, upgrade compatibility, and the
 forced-GC memory gate therefore pass.
