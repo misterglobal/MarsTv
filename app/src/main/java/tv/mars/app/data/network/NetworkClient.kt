@@ -54,8 +54,13 @@ class NetworkClient {
 
     suspend fun getText(url: String): String = get(url).bytes.toString(Charsets.UTF_8)
 
-    suspend fun getStream(url: String, block: suspend (java.io.InputStream) -> Unit) = withContext(Dispatchers.IO) {
-        repeat(STREAM_ATTEMPTS) { attempt ->
+    suspend fun getStream(
+        url: String,
+        retryOnFailure: Boolean = true,
+        block: suspend (java.io.InputStream) -> Unit,
+    ) = withContext(Dispatchers.IO) {
+        val attempts = if (retryOnFailure) STREAM_ATTEMPTS else 1
+        repeat(attempts) { attempt ->
             try {
                 val request = streamRequest(url)
                 client.newCall(request).awaitResponse().use { response ->
@@ -65,7 +70,7 @@ class NetworkClient {
                 return@withContext
             } catch (error: IOException) {
                 currentCoroutineContext().ensureActive()
-                if (error is HttpResponseException || attempt == STREAM_ATTEMPTS - 1) throw error
+                if (error is HttpResponseException || attempt == attempts - 1) throw error
             }
         }
     }

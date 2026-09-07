@@ -142,23 +142,24 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             var accountPublished = false
             runCatching {
                 repository.refreshCatalog(account) { previewRevision ->
-                    if (!accountPublished) {
+                    val publishAccount = !accountPublished
+                    if (publishAccount) {
                         accountPublished = true
                         Log.i(
                             BENCHMARK_TAG,
                             "catalog_first_usable durationMs=${SystemClock.elapsedRealtime() - catalogStartedAtElapsedMs}",
                         )
-                        _uiState.update {
-                            it.copy(
-                                loadedCatalogAccountId = account.id,
-                                catalogRevision = previewRevision,
-                                overlay = OverlayScreen.NONE,
-                                isConnecting = false,
-                                isCatalogLoading = true,
-                            )
-                        }
-                        stateStore.addAccount(account)
                     }
+                    _uiState.update {
+                        it.copy(
+                            loadedCatalogAccountId = account.id,
+                            catalogRevision = previewRevision,
+                            overlay = OverlayScreen.NONE,
+                            isConnecting = false,
+                            isCatalogLoading = true,
+                        )
+                    }
+                    if (publishAccount) stateStore.addAccount(account)
                 }
             }
                 .onSuccess { revision ->

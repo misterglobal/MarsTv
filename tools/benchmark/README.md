@@ -69,3 +69,22 @@ Android 11 x86 TV emulator through an ADB reverse tunnel. The worst passing meas
 
 The three-run timing and sampled-memory gate passes. Final forced-GC evidence, production
 signing, and release-over-release installation evidence remain required.
+
+## Real-provider stress reference
+
+On 2026-09-07, the streaming Xtream import was also exercised against a real provider catalog
+on the same emulator. This is a stress reference rather than the standardized 100,000-entry
+release gate; no provider credentials or URLs are retained in the results.
+
+- First usable page: 5,336 ms.
+- Catalog size: 39,840 live channels, 243,972 movies, and 52,604 series (336,416 objects).
+- Catalog commit: approximately 407 seconds; complete workflow including the optional EPG:
+  425,109 ms.
+- Catalog-phase peak sampled Java heap PSS: 43,136 KiB; peak total process PSS: 135,732 KiB.
+- Whole-workflow peak sampled Java heap PSS: 55,056 KiB; peak total process PSS: 140,716 KiB.
+- Settled sampled Java heap PSS: 18,892 KiB; settled total process PSS: 92,112 KiB.
+- No OOM, crash, or process restart.
+
+The catalog committed before the EPG import completed. Compared with the previous eager Xtream
+path, which approached 189 MiB of Java heap PSS before exposing its first page, the streaming
+path exposed usable data promptly and held catalog-phase Java heap near 42 MiB.
