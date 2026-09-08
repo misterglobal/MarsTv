@@ -20,6 +20,8 @@ class EntitlementPolicyTest {
         assertFalse(policy.canAddFavourite(20))
         assertFalse(policy.canUseMultipleProfiles())
         assertFalse(policy.canUseParentalControls())
+        assertFalse(policy.canUseFullEpg())
+        assertFalse(policy.canSearchGlobally())
         assertEquals(0L, policy.resumePosition(42_000L))
         assertEquals(EntitlementPolicy.FREE_PLAYBACK_LIMIT_MS, policy.playbackLimitMs(ContentKind.MOVIE))
         assertEquals(EntitlementPolicy.FREE_PLAYBACK_LIMIT_MS, policy.playbackLimitMs(ContentKind.EPISODE))
@@ -35,12 +37,16 @@ class EntitlementPolicyTest {
                     ProFeature.PARENTAL_CONTROLS,
                     ProFeature.CONTINUE_WATCHING,
                     ProFeature.UNRESTRICTED_VOD_PLAYBACK,
+                    ProFeature.FULL_EPG,
+                    ProFeature.GLOBAL_SEARCH,
                 ),
             ),
         )
 
         assertTrue(policy.canUseMultipleProfiles())
         assertTrue(policy.canUseParentalControls())
+        assertTrue(policy.canUseFullEpg())
+        assertTrue(policy.canSearchGlobally())
         assertEquals(42_000L, policy.resumePosition(42_000L))
         assertEquals(0L, policy.playbackLimitMs(ContentKind.MOVIE))
         assertEquals(EntitlementPolicy.FREE_PLAYBACK_LIMIT_MS, policy.playbackLimitMs(ContentKind.EPISODE))

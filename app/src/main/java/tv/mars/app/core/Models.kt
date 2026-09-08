@@ -187,4 +187,4 @@ enum class MainDestination(val label: String) {
     SETTINGS("Settings"),
 }
 
-enum class OverlayScreen { NONE, ADD_ACCOUNT, PROFILES, SERIES_DETAILS, PLAYER }
+enum class OverlayScreen { NONE, ADD_ACCOUNT, PROFILES, SERIES_DETAILS, PLAYER, UPGRADE }

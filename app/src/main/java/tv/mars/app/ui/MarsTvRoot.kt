@@ -60,6 +60,7 @@ import tv.mars.app.ui.screens.ProfilesScreen
 import tv.mars.app.ui.screens.SearchScreen
 import tv.mars.app.ui.screens.SeriesDetailsScreen
 import tv.mars.app.ui.screens.SettingsScreen
+import tv.mars.app.ui.screens.UpgradeScreen
 import tv.mars.app.ui.theme.MarsMidnight
 import tv.mars.app.ui.theme.MarsMuted
 import tv.mars.app.ui.theme.MarsRed
@@ -97,6 +98,9 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
                     onRemove = viewModel::removeProfile,
                     onBack = viewModel::dismissOverlay,
                 )
+            }
+            state.overlay == OverlayScreen.UPGRADE -> {
+                UpgradeScreen(lockedFeatureName = state.lockedFeatureName, onBack = viewModel::dismissOverlay)
             }
             state.local.accounts.isEmpty() || state.overlay == OverlayScreen.ADD_ACCOUNT -> {
                 AccountSetupScreen(
@@ -224,6 +228,7 @@ private fun DestinationContent(
             programmesSource = { epgId, start, end -> viewModel.programmes(accountId, epgId, start, end) },
             blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
+            fullEpgEnabled = state.fullEpgEnabled,
             profileHasPin = hasPin,
             isCategoryLocked = viewModel::isCategoryLocked,
             pinMatches = viewModel::pinMatches,
@@ -282,6 +287,7 @@ private fun DestinationContent(
             blockedCategoryKeys = blockedCategoryKeys,
             searchSource = { query, blocked -> viewModel.searchCatalog(accountId, query, blocked) },
             favouriteKeys = state.favouriteKeys,
+            globalSearchEnabled = state.globalSearchEnabled,
             isTelevision = isTelevision,
             onPlayChannel = viewModel::playChannel,
             onOpenMedia = viewModel::openMedia,
@@ -318,6 +324,7 @@ private fun DestinationContent(
                 profiles = state.local.profiles,
                 activeProfile = state.activeProfile,
                 categories = liveCategories + movieCategories + seriesCategories,
+                isPro = state.isPro,
                 pinMatches = viewModel::pinMatches,
                 onSelectAccount = viewModel::selectAccount,
                 onRemoveAccount = viewModel::removeAccount,
@@ -326,6 +333,7 @@ private fun DestinationContent(
                 onOpenProfiles = viewModel::showProfiles,
                 onSetPin = viewModel::setProfilePin,
                 onToggleCategory = viewModel::toggleCategoryRestriction,
+                onUpgrade = viewModel::showUpgrade,
                 modifier = modifier,
             )
         }

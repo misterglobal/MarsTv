@@ -72,6 +72,7 @@ fun SearchScreen(
     blockedCategoryKeys: Set<String>,
     searchSource: suspend (query: String, blockedCategoryKeys: Set<String>) -> CatalogLookup,
     favouriteKeys: Set<String>,
+    globalSearchEnabled: Boolean,
     isTelevision: Boolean,
     onPlayChannel: (Channel) -> Unit,
     onOpenMedia: (MediaContent) -> Unit,
@@ -96,14 +97,18 @@ fun SearchScreen(
             value = query,
             onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Channels, movies, or series") },
+            label = { Text(if (globalSearchEnabled) "Search all TV sources" else "Search this TV source") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             singleLine = true,
         )
         Spacer(Modifier.height(18.dp))
 
         when {
-            normalized.length < 2 -> EmptyState("Start typing", "Enter at least two characters to search this account.")
+            normalized.length < 2 -> EmptyState(
+                "Start typing",
+                if (globalSearchEnabled) "Enter at least two characters to search all TV sources."
+                else "Enter at least two characters to search this TV source.",
+            )
             lookup == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             channels.isEmpty() && media.isEmpty() -> EmptyState("No matches", "Try a title, channel, category, or year.")
             else -> LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {

@@ -10,6 +10,10 @@ class EntitlementPolicy(private val manager: EntitlementManager) {
 
     fun canUseParentalControls(): Boolean = manager.hasFeature(ProFeature.PARENTAL_CONTROLS)
 
+    fun canUseFullEpg(): Boolean = manager.hasFeature(ProFeature.FULL_EPG)
+
+    fun canSearchGlobally(): Boolean = manager.hasFeature(ProFeature.GLOBAL_SEARCH)
+
     fun canAddFavourite(existingCount: Int): Boolean =
         existingCount < FREE_FAVOURITE_LIMIT || manager.hasFeature(ProFeature.FAVORITE_GROUPS)
 

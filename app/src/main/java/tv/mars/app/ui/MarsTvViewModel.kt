@@ -8,12 +8,15 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tv.mars.app.BuildConfig
@@ -58,6 +61,7 @@ data class MarsUiState(
     val searchQuery: String = "",
     val unlockedCategoryKeys: Set<String> = emptySet(),
     val entitlementState: EntitlementState = EntitlementState.Loading,
+    val lockedFeatureName: String? = null,
 ) {
     val activeAccount: IptvAccount?
         get() = local.accounts.firstOrNull { it.id == local.activeAccountId } ?: local.accounts.firstOrNull()
@@ -81,6 +85,15 @@ data class MarsUiState(
     val parentalControlsEnabled: Boolean
         get() = entitlementState is EntitlementState.Pro &&
             ProFeature.PARENTAL_CONTROLS in entitlementState.features
+
+    val fullEpgEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro && ProFeature.FULL_EPG in entitlementState.features
+
+    val globalSearchEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro && ProFeature.GLOBAL_SEARCH in entitlementState.features
+
+    val isPro: Boolean
+        get() = entitlementState is EntitlementState.Pro
 
     val watchHistory: List<WatchRecord>
         get() {
@@ -382,13 +395,28 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         channelEpgId: String,
         windowStart: Long,
         windowEnd: Long,
-    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd)
+    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd).map { programmes ->
+        if (entitlementPolicy.canUseFullEpg()) programmes else currentAndNextProgrammes(programmes)
+    }
 
     suspend fun searchCatalog(
         accountId: String,
         query: String,
         blockedCategoryKeys: Set<String>,
-    ): CatalogLookup = repository.searchCatalog(accountId, query, blockedCategoryKeys)
+    ): CatalogLookup {
+        if (!entitlementPolicy.canSearchGlobally()) {
+            return repository.searchCatalog(accountId, query, blockedCategoryKeys)
+        }
+        return coroutineScope {
+            val lookups = _uiState.value.local.accounts.map { account ->
+                async { repository.searchCatalog(account.id, query, blockedCategoryKeys) }
+            }.map { it.await() }
+            CatalogLookup(
+                channels = lookups.flatMap(CatalogLookup::channels).distinctBy(Channel::key),
+                media = lookups.flatMap(CatalogLookup::media).distinctBy(MediaContent::key),
+            )
+        }
+    }
 
     suspend fun favouriteCatalog(
         accountId: String,
@@ -408,6 +436,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(overlay = OverlayScreen.ADD_ACCOUNT, errorMessage = null) }
     }
     fun showProfiles() = _uiState.update { it.copy(overlay = OverlayScreen.PROFILES, errorMessage = null) }
+    fun showUpgrade() = _uiState.update { it.copy(overlay = OverlayScreen.UPGRADE, lockedFeatureName = null) }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
     fun setSearchQuery(value: String) = _uiState.update { it.copy(searchQuery = value) }
 
@@ -417,6 +446,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 overlay = OverlayScreen.NONE,
                 selectedSeries = null,
                 playerRequest = null,
+                lockedFeatureName = null,
             )
         }
     }
@@ -623,7 +653,9 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun showLockedFeature(name: String) {
-        _uiState.update { it.copy(errorMessage = "$name requires MarsTV Pro") }
+        _uiState.update {
+            it.copy(overlay = OverlayScreen.UPGRADE, lockedFeatureName = name, errorMessage = null)
+        }
     }
 
     private fun normalizeUrl(raw: String): String {
@@ -639,4 +671,11 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private companion object {
         const val BENCHMARK_TAG = "MarsCatalogMetrics"
     }
+}
+
+internal fun currentAndNextProgrammes(programmes: List<Programme>, nowMs: Long = System.currentTimeMillis()): List<Programme> {
+    val ordered = programmes.sortedBy(Programme::startMs)
+    val current = ordered.firstOrNull { it.startMs <= nowMs && it.endMs > nowMs }
+    val next = ordered.firstOrNull { it.startMs >= (current?.endMs ?: nowMs) }
+    return listOfNotNull(current, next)
 }

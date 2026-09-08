@@ -68,6 +68,7 @@ fun SettingsScreen(
     profiles: List<ViewerProfile>,
     activeProfile: ViewerProfile?,
     categories: List<Category>,
+    isPro: Boolean,
     pinMatches: (String) -> Boolean,
     onSelectAccount: (String) -> Unit,
     onRemoveAccount: (String) -> Unit,
@@ -76,6 +77,7 @@ fun SettingsScreen(
     onOpenProfiles: () -> Unit,
     onSetPin: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
+    onUpgrade: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pinDialogMode by remember { mutableStateOf<PinDialogMode?>(null) }
@@ -90,6 +92,22 @@ fun SettingsScreen(
             Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
             Text("Accounts, profiles, and parental controls", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(10.dp))
+        }
+
+        if (!isPro) {
+            item {
+                FocusSurface(onClick = onUpgrade) {
+                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.VpnKey, null, tint = MarsRed)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Upgrade to MarsTV Pro", fontWeight = FontWeight.Bold)
+                            Text("Lifetime access for one device · CAD $14.99", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text("View", color = MarsRed, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         item { SettingsHeading("TV sources") }
