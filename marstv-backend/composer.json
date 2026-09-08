@@ -1,6 +1,7 @@
 {
   "name": "marstv/licensing-backend",
   "description": "Device-bound MarsTV Pro licensing service",
+  "license": "proprietary",
   "type": "project",
   "require": {
     "php": "^8.2",
