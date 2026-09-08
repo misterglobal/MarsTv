@@ -2,3 +2,5 @@
 /vendor/
 /storage/logs/*
 !/storage/logs/.gitkeep
+/public/error_log
+/.phpunit.cache/
