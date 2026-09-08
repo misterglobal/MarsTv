@@ -95,7 +95,18 @@ final class DeviceApi
         $this->limit('device_status_device', (string) $device['id'], 20, 60);
         $touch = $this->db->prepare('UPDATE devices SET last_seen_at=UTC_TIMESTAMP() WHERE id=:id');
         $touch->execute(['id' => $device['id']]);
-        return ['status' => 'free', 'server_time' => time()];
+        $query = $this->db->prepare("SELECT * FROM licenses WHERE current_device_id=:device AND status='active' LIMIT 1");
+        $query->execute(['device' => $device['id']]);
+        $license = $query->fetch();
+        if (!$license) return ['status' => 'free', 'server_time' => time()];
+        $signer = new \MarsTv\Domain\EntitlementSigner(
+            (string) config('entitlement_private_key_path'),
+            (string) config('entitlement_key_id'),
+        );
+        $token = $signer->entitlement($license, $device);
+        $verified = $this->db->prepare('UPDATE licenses SET last_verified_at=UTC_TIMESTAMP() WHERE id=:id');
+        $verified->execute(['id' => $license['id']]);
+        return ['status' => 'pro', 'entitlement' => $token, 'server_time' => time()];
     }
 
     private function authenticate(array $headers, string $method, string $path, string $rawBody, ?string $expectedUuid = null): array

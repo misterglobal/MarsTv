@@ -5,6 +5,7 @@ declare(strict_types=1);
 require dirname(__DIR__).'/src/bootstrap.php';
 require dirname(__DIR__).'/src/ActivationApi.php';
 require dirname(__DIR__).'/src/DeviceApi.php';
+require dirname(__DIR__).'/app/Domain/EntitlementSigner.php';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, max-age=0');

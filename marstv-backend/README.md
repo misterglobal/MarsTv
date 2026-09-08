@@ -15,6 +15,12 @@ This component is deliberately pre-payment. Do not accept real payments until re
 
 Run `composer test` before deployment. Keep `FREEMIUS_CHECKOUT_ENABLED=false` until the full payment and webhook acceptance suite passes. Never commit `.env`, signing private keys, activation/rate-limit peppers, logs, customer information, or database exports.
 
+For a closed-beta test device that has already registered, grant an idempotent audited licence without editing database rows:
+
+`php bin/marstv-support test-license:grant --device=MARS-XXXX --operator=YOUR_ID --reason="closed beta test"`
+
+The next authenticated device status check returns a freshly signed, non-expiring, device-bound entitlement. This command creates a zero-value support-test purchase and must not be used to represent a real payment.
+
 ## Current status
 
 The merged repository contains the public site and browser activation flow plus the core relational invariants, P-256 public-key validation, base64url/HMAC helpers, and exact device-challenge byte contract. Device registration, atomic challenge consumption, authenticated status, entitlement signing, and the support CLI remain the next implementation slice.
