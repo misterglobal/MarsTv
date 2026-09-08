@@ -125,7 +125,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     val privatePortalConfigured: Boolean get() = BuildConfig.PRIVATE_PORTAL_URL.isNotBlank()
 
     init {
-        viewModelScope.launch { entitlementManager.restore() }
+        viewModelScope.launch {
+            entitlementManager.restore()
+            entitlementManager.refresh(tv.mars.app.entitlement.RefreshReason.APP_START)
+        }
         viewModelScope.launch {
             entitlementManager.state.collectLatest { entitlement ->
                 _uiState.update { it.copy(entitlementState = entitlement) }

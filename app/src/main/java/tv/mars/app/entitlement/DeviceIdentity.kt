@@ -19,6 +19,15 @@ class DeviceIdentity(private val context: Context) {
 
     fun deviceUuid(): String = ensureIdentity().first
 
+    fun adoptRegisteredDeviceUuid(deviceUuid: String) {
+        require(runCatching { UUID.fromString(deviceUuid) }.isSuccess) { "Invalid registered device UUID" }
+        check(preferences.edit().putString(DEVICE_UUID, deviceUuid).putBoolean(REGISTERED, true).commit()) {
+            "Could not persist registered device ID"
+        }
+    }
+
+    fun isRegistered(): Boolean = preferences.getBoolean(REGISTERED, false)
+
     fun publicKeySpki(): ByteArray = ensureIdentity().second
 
     fun publicKeySpkiBase64(): String = Base64.getEncoder().encodeToString(publicKeySpki())
@@ -90,6 +99,7 @@ class DeviceIdentity(private val context: Context) {
         const val KEY_ALIAS = "marstv_device_auth_v1"
         private const val PREFERENCES = "mars_device_identity_v1"
         private const val DEVICE_UUID = "device_uuid"
+        private const val REGISTERED = "registered"
 
         internal fun sha256(value: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(value)
         internal fun sha256Hex(value: String): String = sha256(value.toByteArray(StandardCharsets.UTF_8)).joinToString("") { "%02x".format(it) }

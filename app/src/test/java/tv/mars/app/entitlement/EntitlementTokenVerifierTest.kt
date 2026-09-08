@@ -40,11 +40,25 @@ class EntitlementTokenVerifierTest {
         assertTrue(verifier().verifyCached(token(iat = 1), DEVICE, THUMBPRINT).isSuccess)
     }
 
+    @Test
+    fun `signed revocation is device bound and uses a distinct type`() {
+        val payload = """{"iss":"https://marstv.online","aud":"tv.mars.app:direct","sub":"$DEVICE","license_id":"license","license_version":8,"status":"revoked","iat":900,"reason_code":"refund","token_version":1}"""
+        val revocation = signedToken("marstv-revocation+jwt", payload)
+
+        assertEquals(8, verifier().verifyRevocation(revocation, DEVICE, 1_000).getOrThrow().licenseVersion)
+        assertTrue(verifier().verifyRevocation(revocation, "other-device", 1_000).isFailure)
+        assertTrue(verifier().verifyReceived(revocation, DEVICE, THUMBPRINT, 1_000).isFailure)
+    }
+
     private fun verifier() = EntitlementTokenVerifier.fromPem(publicPem)
 
     private fun token(iat: Long = 900): String {
-        val header = """{"alg":"ES256","kid":"entitlement-2026-01","typ":"marstv-entitlement+jwt"}"""
         val payload = """{"iss":"https://marstv.online","aud":"tv.mars.app:direct","sub":"$DEVICE","license_id":"license","license_version":7,"device_key_thumbprint":"$THUMBPRINT","plan_id":"pro_lifetime_v1","features":["full_epg"],"iat":$iat,"refresh_after":2000,"token_version":1}"""
+        return signedToken("marstv-entitlement+jwt", payload)
+    }
+
+    private fun signedToken(type: String, payload: String): String {
+        val header = """{"alg":"ES256","kid":"entitlement-2026-01","typ":"$type"}"""
         val signingInput = "${b64(header.toByteArray())}.${b64(payload.toByteArray())}"
         val signer = Signature.getInstance("SHA256withECDSA")
         signer.initSign(keyPair.private)

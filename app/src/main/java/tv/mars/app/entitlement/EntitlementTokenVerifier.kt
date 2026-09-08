@@ -18,6 +18,13 @@ data class VerifiedEntitlement(
     val tokenVersion: Int,
 )
 
+data class VerifiedRevocation(
+    val deviceId: String,
+    val licenseId: String,
+    val licenseVersion: Long,
+    val reasonCode: String,
+)
+
 class EntitlementTokenVerifier private constructor(private val keys: Map<String, PublicKey>) {
     private val json = Json { ignoreUnknownKeys = false }
 
@@ -31,27 +38,32 @@ class EntitlementTokenVerifier private constructor(private val keys: Map<String,
         serverTimeEpochSeconds: Long,
     ): Result<VerifiedEntitlement> = verify(token, deviceUuid, keyThumbprint, serverTimeEpochSeconds)
 
+    fun verifyRevocation(
+        token: String,
+        deviceUuid: String,
+        serverTimeEpochSeconds: Long,
+    ): Result<VerifiedRevocation> = runCatching {
+        val payload = verifySignatureAndPayload(token, REVOCATION_TYPE)
+        require(payload.string("iss") == ISSUER && payload.string("aud") == AUDIENCE)
+        require(payload.string("sub") == deviceUuid) { "Revocation belongs to another device" }
+        require(payload.string("status") == "revoked")
+        require(payload.long("token_version").toInt() == TOKEN_VERSION)
+        require(payload.long("iat") <= serverTimeEpochSeconds + MAX_FUTURE_IAT_SECONDS)
+        VerifiedRevocation(
+            deviceId = deviceUuid,
+            licenseId = payload.string("license_id"),
+            licenseVersion = payload.long("license_version"),
+            reasonCode = payload.string("reason_code"),
+        )
+    }
+
     private fun verify(
         token: String,
         deviceUuid: String,
         keyThumbprint: String,
         serverTimeEpochSeconds: Long?,
     ): Result<VerifiedEntitlement> = runCatching {
-        val parts = token.split('.')
-        require(parts.size == 3) { "Entitlement must use compact JWS serialization" }
-        val header = parseObject(parts[0])
-        require(header.keys == setOf("alg", "kid", "typ")) { "Unexpected entitlement header" }
-        require(header.string("alg") == "ES256") { "Unsupported entitlement algorithm" }
-        require(header.string("typ") == ENTITLEMENT_TYPE) { "Unexpected entitlement type" }
-        val key = keys[header.string("kid")] ?: error("Unknown entitlement signing key")
-        val joseSignature = decodeBase64Url(parts[2])
-        require(joseSignature.size == 64) { "Invalid ES256 signature length" }
-        val verifier = Signature.getInstance("SHA256withECDSA")
-        verifier.initVerify(key)
-        verifier.update("${parts[0]}.${parts[1]}".toByteArray(StandardCharsets.US_ASCII))
-        require(verifier.verify(joseToDer(joseSignature))) { "Invalid entitlement signature" }
-
-        val payload = parseObject(parts[1])
+        val payload = verifySignatureAndPayload(token, ENTITLEMENT_TYPE)
         require(payload.string("iss") == ISSUER) { "Wrong entitlement issuer" }
         require(payload.string("aud") == AUDIENCE) { "Wrong entitlement audience" }
         require(payload.string("sub") == deviceUuid) { "Entitlement belongs to another device" }
@@ -80,6 +92,23 @@ class EntitlementTokenVerifier private constructor(private val keys: Map<String,
         )
     }
 
+    private fun verifySignatureAndPayload(token: String, expectedType: String): JsonObject {
+        val parts = token.split('.')
+        require(parts.size == 3) { "Token must use compact JWS serialization" }
+        val header = parseObject(parts[0])
+        require(header.keys == setOf("alg", "kid", "typ")) { "Unexpected token header" }
+        require(header.string("alg") == "ES256") { "Unsupported token algorithm" }
+        require(header.string("typ") == expectedType) { "Unexpected token type" }
+        val key = keys[header.string("kid")] ?: error("Unknown signing key")
+        val joseSignature = decodeBase64Url(parts[2])
+        require(joseSignature.size == 64) { "Invalid ES256 signature length" }
+        val verifier = Signature.getInstance("SHA256withECDSA")
+        verifier.initVerify(key)
+        verifier.update("${parts[0]}.${parts[1]}".toByteArray(StandardCharsets.US_ASCII))
+        require(verifier.verify(joseToDer(joseSignature))) { "Invalid token signature" }
+        return parseObject(parts[1])
+    }
+
     private fun parseObject(encoded: String): JsonObject =
         json.parseToJsonElement(String(decodeBase64Url(encoded), StandardCharsets.UTF_8)) as JsonObject
 
@@ -90,6 +119,7 @@ class EntitlementTokenVerifier private constructor(private val keys: Map<String,
         const val ISSUER = "https://marstv.online"
         const val AUDIENCE = "tv.mars.app:direct"
         const val ENTITLEMENT_TYPE = "marstv-entitlement+jwt"
+        const val REVOCATION_TYPE = "marstv-revocation+jwt"
         const val TOKEN_VERSION = 1
         const val MAX_FUTURE_IAT_SECONDS = 300L
 
