@@ -7,6 +7,7 @@ import tv.mars.app.data.network.BackendHttpException
 import tv.mars.app.data.network.MarsLicensingApi
 import java.io.IOException
 import java.net.URI
+import java.net.SocketTimeoutException
 import java.time.Instant
 
 internal class DirectEntitlementProvider(
@@ -38,6 +39,8 @@ internal class DirectEntitlementProvider(
             activationFailure("Activation service returned malformed JSON")
         } catch (_: IllegalArgumentException) {
             activationFailure("Activation service returned invalid session details")
+        } catch (_: SocketTimeoutException) {
+            activationFailure("MarsTV activation timed out. Please try again")
         } catch (_: IOException) {
             activationFailure("Could not contact the MarsTV activation service")
         } catch (_: Exception) {

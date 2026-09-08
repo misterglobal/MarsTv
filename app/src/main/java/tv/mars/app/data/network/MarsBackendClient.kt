@@ -13,7 +13,7 @@ class MarsBackendClient(baseUrl: String) {
 
     val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(10))
-        .readTimeout(Duration.ofSeconds(15))
+        .readTimeout(Duration.ofSeconds(45))
         .writeTimeout(Duration.ofSeconds(15))
         .followRedirects(false)
         .followSslRedirects(false)
