@@ -100,7 +100,12 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
                 )
             }
             state.overlay == OverlayScreen.UPGRADE -> {
-                UpgradeScreen(lockedFeatureName = state.lockedFeatureName, onBack = viewModel::dismissOverlay)
+                UpgradeScreen(
+                    lockedFeatureName = state.lockedFeatureName,
+                    activationState = state.activationState,
+                    onActivate = viewModel::beginActivation,
+                    onBack = viewModel::dismissOverlay,
+                )
             }
             state.local.accounts.isEmpty() || state.overlay == OverlayScreen.ADD_ACCOUNT -> {
                 AccountSetupScreen(

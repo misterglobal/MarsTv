@@ -2,9 +2,10 @@ package tv.mars.app.entitlement
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import tv.mars.app.data.network.ActivationSession
 import tv.mars.app.data.network.MarsLicensingApi
 import java.io.IOException
+import java.net.URI
+import java.time.Instant
 
 internal class DirectEntitlementProvider(
     private val store: EntitlementStore,
@@ -15,8 +16,24 @@ internal class DirectEntitlementProvider(
 ) : EntitlementProvider {
     private val current = MutableStateFlow<EntitlementState>(EntitlementState.Loading)
     override val state: StateFlow<EntitlementState> = current
-    private val currentActivation = MutableStateFlow<ActivationSession?>(null)
-    val activationSession: StateFlow<ActivationSession?> = currentActivation
+    private val currentActivation = MutableStateFlow<ActivationState>(ActivationState.Idle)
+    override val activationState: StateFlow<ActivationState> = currentActivation
+
+    override suspend fun beginActivation(): ActivationState {
+        if (!verifier.isConfigured) return activationFailure("Activation is not configured in this build")
+        currentActivation.value = ActivationState.Loading
+        return try {
+            val session = if (identity.isRegistered()) api.createActivationSession(identity)
+            else api.register(identity, appVersionCode)
+            val ready = session.toActivationState(identity.deviceUuid())
+            currentActivation.value = ready
+            ready
+        } catch (_: SecurityException) {
+            activationFailure("This device could not create a secure activation identity")
+        } catch (_: Exception) {
+            activationFailure("Could not contact the MarsTV activation service")
+        }
+    }
 
     override suspend fun restore(): EntitlementResult {
         val stored = store.load()
@@ -36,7 +53,7 @@ internal class DirectEntitlementProvider(
                 if (current.value is EntitlementState.Loading) return update(EntitlementState.Free)
                 return EntitlementResult.Unchanged(current.value)
             }
-            currentActivation.value = api.register(identity, appVersionCode)
+            beginActivation()
             if (current.value is EntitlementState.Loading) update(EntitlementState.Free)
             else EntitlementResult.Unchanged(current.value)
         } else {
@@ -61,7 +78,7 @@ internal class DirectEntitlementProvider(
                 verified.state.licenseVersion < maxOf(existing.licenseVersion, existing.revocationFloor)
             ) return EntitlementResult.Failed(EntitlementIssue.INVALID_TOKEN)
             store.save(StoredEntitlement(token, verified.state.licenseId, verified.state.licenseVersion, existing?.revocationFloor ?: 0))
-            currentActivation.value = null
+            currentActivation.value = ActivationState.Activated
             update(verified.state)
         }
         "revoked" -> {
@@ -98,4 +115,20 @@ internal class DirectEntitlementProvider(
         current.value = next
         return if (changed) EntitlementResult.Updated(next) else EntitlementResult.Unchanged(next)
     }
+
+    private fun activationFailure(message: String): ActivationState.Failed =
+        ActivationState.Failed(message).also { currentActivation.value = it }
+}
+
+internal fun tv.mars.app.data.network.ActivationSession.toActivationState(expectedDeviceId: String): ActivationState.Ready {
+    require(deviceId == expectedDeviceId) { "Activation session belongs to another device" }
+    require(deviceCode.matches(Regex("MARS-[A-HJ-NP-Z2-9]{4,12}"))) { "Invalid device code" }
+    require(activationCode.matches(Regex("[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}"))) { "Invalid activation code" }
+    val activationUri = URI(activationUrl)
+    val qrUri = URI(qrPayload)
+    require(activationUri.scheme == "https" && activationUri.host == "marstv.online") { "Invalid activation URL" }
+    require(qrUri.scheme == "https" && qrUri.host == "marstv.online") { "Invalid QR payload" }
+    val expiry = Instant.parse(expiresAt)
+    require(expiry.isAfter(Instant.now())) { "Activation session has expired" }
+    return ActivationState.Ready(deviceCode, activationCode, activationUrl, qrPayload, expiry)
 }

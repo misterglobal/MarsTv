@@ -27,6 +27,7 @@ data class VerifiedRevocation(
 
 class EntitlementTokenVerifier private constructor(private val keys: Map<String, PublicKey>) {
     private val json = Json { ignoreUnknownKeys = false }
+    val isConfigured: Boolean get() = keys.isNotEmpty()
 
     fun verifyCached(token: String, deviceUuid: String, keyThumbprint: String): Result<VerifiedEntitlement> =
         verify(token, deviceUuid, keyThumbprint, serverTimeEpochSeconds = null)

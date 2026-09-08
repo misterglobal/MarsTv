@@ -43,16 +43,37 @@ sealed interface EntitlementResult {
     data class Failed(val issue: EntitlementIssue) : EntitlementResult
 }
 
+sealed interface ActivationState {
+    data object Idle : ActivationState
+    data object Loading : ActivationState
+    data class Ready(
+        val deviceCode: String,
+        val activationCode: String,
+        val activationUrl: String,
+        val qrPayload: String,
+        val expiresAt: Instant,
+    ) : ActivationState
+    data class Failed(val message: String) : ActivationState
+    data object Activated : ActivationState
+}
+
+private val idleActivationState: StateFlow<ActivationState> =
+    kotlinx.coroutines.flow.MutableStateFlow(ActivationState.Idle)
+
 interface EntitlementManager {
     val state: StateFlow<EntitlementState>
+    val activationState: StateFlow<ActivationState>
     suspend fun refresh(reason: RefreshReason): EntitlementResult
+    suspend fun beginActivation(): ActivationState
     fun hasFeature(feature: ProFeature): Boolean
     suspend fun restore(): EntitlementResult
 }
 
 internal interface EntitlementProvider {
     val state: StateFlow<EntitlementState>
+    val activationState: StateFlow<ActivationState> get() = idleActivationState
     suspend fun refresh(reason: RefreshReason): EntitlementResult
+    suspend fun beginActivation(): ActivationState = ActivationState.Failed("Activation is unavailable in this build")
     suspend fun restore(): EntitlementResult
 }
 
@@ -60,8 +81,11 @@ internal class DefaultEntitlementManager(
     private val provider: EntitlementProvider,
 ) : EntitlementManager {
     override val state: StateFlow<EntitlementState> = provider.state
+    override val activationState: StateFlow<ActivationState> = provider.activationState
 
     override suspend fun refresh(reason: RefreshReason): EntitlementResult = provider.refresh(reason)
+
+    override suspend fun beginActivation(): ActivationState = provider.beginActivation()
 
     override fun hasFeature(feature: ProFeature): Boolean =
         (state.value as? EntitlementState.Pro)?.features?.contains(feature) == true

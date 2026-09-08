@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,6 +41,7 @@ import tv.mars.app.data.local.MarsTvDatabase
 import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
 import tv.mars.app.entitlement.EntitlementManager
+import tv.mars.app.entitlement.ActivationState
 import tv.mars.app.entitlement.EntitlementPolicy
 import tv.mars.app.entitlement.EntitlementState
 import tv.mars.app.entitlement.ProFeature
@@ -61,6 +63,7 @@ data class MarsUiState(
     val searchQuery: String = "",
     val unlockedCategoryKeys: Set<String> = emptySet(),
     val entitlementState: EntitlementState = EntitlementState.Loading,
+    val activationState: ActivationState = ActivationState.Idle,
     val lockedFeatureName: String? = null,
 ) {
     val activeAccount: IptvAccount?
@@ -117,6 +120,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val entitlementManager: EntitlementManager = createEntitlementManager(application)
     private val entitlementPolicy = EntitlementPolicy(entitlementManager)
     private var catalogJob: Job? = null
+    private var activationPollingJob: Job? = null
     private var catalogJobAccountId: String? = null
     private var catalogStartedAtElapsedMs = 0L
     private val _uiState = MutableStateFlow(MarsUiState())
@@ -131,7 +135,17 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             entitlementManager.state.collectLatest { entitlement ->
-                _uiState.update { it.copy(entitlementState = entitlement) }
+                _uiState.update {
+                    it.copy(
+                        entitlementState = entitlement,
+                        overlay = if (entitlement is EntitlementState.Pro && it.overlay == OverlayScreen.UPGRADE) OverlayScreen.NONE else it.overlay,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            entitlementManager.activationState.collectLatest { activation ->
+                _uiState.update { it.copy(activationState = activation) }
             }
         }
         viewModelScope.launch {
@@ -441,10 +455,24 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun showProfiles() = _uiState.update { it.copy(overlay = OverlayScreen.PROFILES, errorMessage = null) }
     fun showUpgrade() = _uiState.update { it.copy(overlay = OverlayScreen.UPGRADE, lockedFeatureName = null) }
+    fun beginActivation() {
+        activationPollingJob?.cancel()
+        activationPollingJob = viewModelScope.launch {
+            val activation = entitlementManager.beginActivation()
+            if (activation !is ActivationState.Ready) return@launch
+            while (java.time.Instant.now().isBefore(activation.expiresAt)) {
+                delay(ACTIVATION_POLL_INTERVAL_MS)
+                if (_uiState.value.overlay != OverlayScreen.UPGRADE) return@launch
+                entitlementManager.refresh(tv.mars.app.entitlement.RefreshReason.USER_REQUEST)
+                if (entitlementManager.state.value is EntitlementState.Pro) return@launch
+            }
+        }
+    }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
     fun setSearchQuery(value: String) = _uiState.update { it.copy(searchQuery = value) }
 
     fun dismissOverlay() {
+        if (_uiState.value.overlay == OverlayScreen.UPGRADE) activationPollingJob?.cancel()
         _uiState.update {
             it.copy(
                 overlay = OverlayScreen.NONE,
@@ -674,6 +702,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val BENCHMARK_TAG = "MarsCatalogMetrics"
+        const val ACTIVATION_POLL_INTERVAL_MS = 5_000L
     }
 }
 

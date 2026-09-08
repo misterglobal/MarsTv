@@ -76,6 +76,19 @@ class MarsLicensingApi(private val backend: MarsBackendClient) {
     suspend fun status(identity: DeviceIdentity): DeviceStatusResponse {
         val deviceId = identity.deviceUuid()
         val path = "/api/v1/devices/$deviceId/status"
+        return authenticatedPost(identity, path, DeviceStatusResponse.serializer())
+    }
+
+    suspend fun createActivationSession(identity: DeviceIdentity): ActivationSession {
+        return authenticatedPost(identity, "/api/v1/activation-sessions", ActivationSession.serializer())
+    }
+
+    private suspend fun <T> authenticatedPost(
+        identity: DeviceIdentity,
+        path: String,
+        serializer: kotlinx.serialization.KSerializer<T>,
+    ): T {
+        val deviceId = identity.deviceUuid()
         val body = "{}"
         val bodyHash = DeviceIdentity.base64Url(DeviceIdentity.sha256(body.toByteArray(Charsets.UTF_8)))
         val challengeBody = json.encodeToString(ChallengeRequest("POST", path, bodyHash))
@@ -99,7 +112,7 @@ class MarsLicensingApi(private val backend: MarsBackendClient) {
         return post(
             path,
             body,
-            DeviceStatusResponse.serializer(),
+            serializer,
             mapOf(
                 "X-Mars-Challenge-Id" to challenge.challengeId,
                 "X-Mars-Device-Signature" to identity.signChallenge(challenge),
