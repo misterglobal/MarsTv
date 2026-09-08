@@ -1,0 +1,21 @@
+{
+  "name": "marstv/licensing-backend",
+  "description": "Device-bound MarsTV Pro licensing service",
+  "type": "project",
+  "require": {
+    "php": "^8.2",
+    "ext-openssl": "*",
+    "ext-pdo": "*",
+    "ramsey/uuid": "^4.7",
+    "slim/psr7": "^1.7",
+    "slim/slim": "^4.14",
+    "vlucas/phpdotenv": "^5.6"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5"
+  },
+  "autoload": { "psr-4": { "MarsTv\\": "app/" } },
+  "autoload-dev": { "psr-4": { "MarsTv\\Tests\\": "tests/" } },
+  "scripts": { "test": "phpunit" },
+  "config": { "sort-packages": true }
+}
