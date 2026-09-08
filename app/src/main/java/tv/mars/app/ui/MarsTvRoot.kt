@@ -208,10 +208,14 @@ private fun DestinationContent(
     isTelevision: Boolean,
     modifier: Modifier,
 ) {
-    val hasPin = !state.activeProfile?.pinHash.isNullOrBlank()
+    val hasPin = state.parentalControlsEnabled && !state.activeProfile?.pinHash.isNullOrBlank()
     val openSettings = { viewModel.setDestination(MainDestination.SETTINGS) }
     val accountId = state.activeAccount?.id.orEmpty()
-    val blockedCategoryKeys = state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
+    val blockedCategoryKeys = if (state.parentalControlsEnabled) {
+        state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
+    } else {
+        emptySet()
+    }
     when (state.destination) {
         MainDestination.LIVE -> LiveGuideScreen(
             accountId = accountId,
@@ -288,6 +292,7 @@ private fun DestinationContent(
             accountId = accountId,
             catalogRevision = state.catalogRevision,
             favouriteKeys = state.favouriteKeys,
+            lockedFavouriteKeys = state.lockedFavouriteKeys,
             blockedCategoryKeys = blockedCategoryKeys,
             favouritesSource = { keys, blocked -> viewModel.favouriteCatalog(accountId, keys, blocked) },
             continueWatching = state.continueWatching,

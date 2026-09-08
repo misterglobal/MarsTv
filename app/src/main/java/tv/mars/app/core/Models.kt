@@ -175,6 +175,7 @@ data class PlayerRequest(
     val kind: ContentKind,
     val artworkUrl: String = "",
     val resumePositionMs: Long = 0,
+    val playbackLimitMs: Long = 0,
 )
 
 enum class MainDestination(val label: String) {

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -169,6 +170,7 @@ fun LibraryScreen(
     accountId: String,
     catalogRevision: Long,
     favouriteKeys: Set<String>,
+    lockedFavouriteKeys: Set<String>,
     blockedCategoryKeys: Set<String>,
     favouritesSource: suspend (favouriteKeys: Set<String>, blockedCategoryKeys: Set<String>) -> CatalogLookup,
     continueWatching: List<WatchRecord>,
@@ -185,6 +187,11 @@ fun LibraryScreen(
     val favourites by produceState<CatalogLookup?>(null, accountId, catalogRevision, favouriteKeys, blockedCategoryKeys) {
         value = if (accountId.isBlank()) CatalogLookup() else {
             favouritesSource(favouriteKeys, blockedCategoryKeys)
+        }
+    }
+    val lockedFavourites by produceState<CatalogLookup?>(null, accountId, catalogRevision, lockedFavouriteKeys, blockedCategoryKeys) {
+        value = if (accountId.isBlank() || lockedFavouriteKeys.isEmpty()) CatalogLookup() else {
+            favouritesSource(lockedFavouriteKeys, blockedCategoryKeys)
         }
     }
     val tabs = listOf("Favourites", "Continue", "History")
@@ -231,6 +238,7 @@ fun LibraryScreen(
                     onPlayChannel = onPlayChannel,
                     onOpenMedia = onOpenMedia,
                     onToggleFavourite = onToggleFavourite,
+                    lockedFavourites = lockedFavourites.orEmpty(),
                 )
             }
             1 -> HistoryList(
@@ -260,8 +268,9 @@ private fun FavouriteLibrary(
     onPlayChannel: (Channel) -> Unit,
     onOpenMedia: (MediaContent) -> Unit,
     onToggleFavourite: (String) -> Unit,
+    lockedFavourites: CatalogLookup,
 ) {
-    if (channels.isEmpty() && media.isEmpty()) {
+    if (channels.isEmpty() && media.isEmpty() && lockedFavourites.channels.isEmpty() && lockedFavourites.media.isEmpty()) {
         EmptyState("No favourites yet", "Use the heart button on a channel, movie, or series.")
         return
     }
@@ -292,7 +301,34 @@ private fun FavouriteLibrary(
                 }
             }
         }
+        if (lockedFavourites.channels.isNotEmpty() || lockedFavourites.media.isNotEmpty()) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Lock, null, tint = MarsViolet)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Additional favourites — MarsTV Pro", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                }
+            }
+            items(lockedFavourites.channels, key = { "locked:${it.key}" }) { channel ->
+                LockedFavouriteRow(channel.name)
+            }
+            items(lockedFavourites.media, key = { "locked:${it.key}" }) { item ->
+                LockedFavouriteRow(item.title)
+            }
+        }
         item { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+@Composable
+private fun LockedFavouriteRow(title: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().background(MarsSurfaceRaised, RoundedCornerShape(8.dp)).padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Lock, null, tint = MarsMuted)
+        Spacer(Modifier.width(10.dp))
+        Text(title, color = MarsMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

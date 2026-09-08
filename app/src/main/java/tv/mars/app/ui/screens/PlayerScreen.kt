@@ -36,6 +36,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 import tv.mars.app.MainActivity
 import tv.mars.app.core.PlayerRequest
 import tv.mars.app.data.network.NetworkClient
@@ -59,6 +60,7 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             .build()
     }
     var errorMessage by remember(request.url) { mutableStateOf<String?>(null) }
+    var playbackLimitReached by remember(request.url) { mutableStateOf(false) }
 
     fun close() {
         onClose(player.currentPosition.coerceAtLeast(0L), player.duration.coerceAtLeast(0L))
@@ -87,6 +89,20 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
         player.prepare()
         if (request.resumePositionMs > 0L) player.seekTo(request.resumePositionMs)
         player.playWhenReady = true
+    }
+
+    LaunchedEffect(player, request.url, request.playbackLimitMs) {
+        if (request.playbackLimitMs <= 0L) return@LaunchedEffect
+        while (true) {
+            delay(100)
+            if (player.currentPosition >= request.playbackLimitMs) {
+                player.pause()
+                player.seekTo(request.playbackLimitMs)
+                playbackLimitReached = true
+                errorMessage = "Free playback ends at 10:00. Upgrade to MarsTV Pro to watch the full title."
+                break
+            }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -119,7 +135,11 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             ) {
                 Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MarsRed)
                 Spacer(Modifier.height(10.dp))
-                Text("Playback problem", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    if (playbackLimitReached) "Free playback limit reached" else "Playback problem",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(message, color = MarsMuted)
                 Spacer(Modifier.height(16.dp))

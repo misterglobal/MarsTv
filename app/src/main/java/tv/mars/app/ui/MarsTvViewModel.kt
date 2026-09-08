@@ -37,6 +37,8 @@ import tv.mars.app.data.local.MarsTvDatabase
 import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
 import tv.mars.app.entitlement.EntitlementManager
+import tv.mars.app.entitlement.EntitlementPolicy
+import tv.mars.app.entitlement.EntitlementState
 import tv.mars.app.entitlement.ProFeature
 import tv.mars.app.entitlement.createEntitlementManager
 
@@ -55,6 +57,7 @@ data class MarsUiState(
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val unlockedCategoryKeys: Set<String> = emptySet(),
+    val entitlementState: EntitlementState = EntitlementState.Loading,
 ) {
     val activeAccount: IptvAccount?
         get() = local.accounts.firstOrNull { it.id == local.activeAccountId } ?: local.accounts.firstOrNull()
@@ -62,14 +65,35 @@ data class MarsUiState(
     val activeProfile: ViewerProfile?
         get() = local.profiles.firstOrNull { it.id == local.activeProfileId } ?: local.profiles.firstOrNull()
 
-    val favouriteKeys: Set<String>
+    private val storedFavouriteKeys: Set<String>
         get() = activeProfile?.let { local.favouriteKeysByProfile[it.id].orEmpty() }.orEmpty()
 
+    val favouriteKeys: Set<String>
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.FAVORITE_GROUPS in entitlementState.features
+        ) storedFavouriteKeys else storedFavouriteKeys.take(EntitlementPolicy.FREE_FAVOURITE_LIMIT).toSet()
+
+    val lockedFavouriteKeys: Set<String>
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.FAVORITE_GROUPS in entitlementState.features
+        ) emptySet() else storedFavouriteKeys.drop(EntitlementPolicy.FREE_FAVOURITE_LIMIT).toSet()
+
+    val parentalControlsEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro &&
+            ProFeature.PARENTAL_CONTROLS in entitlementState.features
+
     val watchHistory: List<WatchRecord>
-        get() = activeProfile?.let { local.watchHistoryByProfile[it.id].orEmpty() }.orEmpty()
+        get() {
+            val stored = activeProfile?.let { local.watchHistoryByProfile[it.id].orEmpty() }.orEmpty()
+            return if (entitlementState is EntitlementState.Pro &&
+                ProFeature.CONTINUE_WATCHING in entitlementState.features
+            ) stored else stored.sortedByDescending(WatchRecord::watchedAt).take(EntitlementPolicy.FREE_HISTORY_LIMIT)
+        }
 
     val continueWatching: List<WatchRecord>
-        get() = watchHistory.filter(WatchRecord::canContinue)
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.CONTINUE_WATCHING in entitlementState.features
+        ) watchHistory.filter(WatchRecord::canContinue) else emptyList()
 }
 
 class MarsTvViewModel(application: Application) : AndroidViewModel(application) {
@@ -78,6 +102,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
     private val entitlementManager: EntitlementManager = createEntitlementManager()
+    private val entitlementPolicy = EntitlementPolicy(entitlementManager)
     private var catalogJob: Job? = null
     private var catalogJobAccountId: String? = null
     private var catalogStartedAtElapsedMs = 0L
@@ -87,6 +112,11 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     val privatePortalConfigured: Boolean get() = BuildConfig.PRIVATE_PORTAL_URL.isNotBlank()
 
     init {
+        viewModelScope.launch {
+            entitlementManager.state.collectLatest { entitlement ->
+                _uiState.update { it.copy(entitlementState = entitlement) }
+            }
+        }
         viewModelScope.launch {
             stateStore.migrateForFreeGates()
             stateStore.state.collectLatest { local ->
@@ -121,7 +151,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         m3uUrl: String,
     ) {
         if (_uiState.value.isConnecting) return
-        if (_uiState.value.local.accounts.isNotEmpty() && !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)) {
+        if (!entitlementPolicy.canAddAccount(_uiState.value.local.accounts.size)) {
             showLockedFeature("Multiple TV sources")
             return
         }
@@ -371,9 +401,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun showAddAccount() {
-        if (_uiState.value.local.accounts.isNotEmpty() &&
-            !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)
-        ) {
+        if (!entitlementPolicy.canAddAccount(_uiState.value.local.accounts.size)) {
             showLockedFeature("Multiple TV sources")
             return
         }
@@ -425,7 +453,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         url = repository.playbackUrl(account, media.playbackUrl),
                         kind = media.kind,
                         artworkUrl = media.artworkUrl,
-                        resumePositionMs = resume,
+                        resumePositionMs = entitlementPolicy.resumePosition(resume),
+                        playbackLimitMs = entitlementPolicy.playbackLimitMs(media.kind),
                     ),
                 )
             }
@@ -461,7 +490,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 url = repository.playbackUrl(account, episode.playbackUrl),
                 kind = ContentKind.EPISODE,
                 artworkUrl = episode.artworkUrl,
-                resumePositionMs = resume,
+                resumePositionMs = entitlementPolicy.resumePosition(resume),
+                playbackLimitMs = entitlementPolicy.playbackLimitMs(ContentKind.EPISODE),
             ),
         )
     }
@@ -474,7 +504,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             url = record.playbackUrl,
             kind = record.kind,
             artworkUrl = record.artworkUrl,
-            resumePositionMs = record.positionMs,
+            resumePositionMs = entitlementPolicy.resumePosition(record.positionMs),
+            playbackLimitMs = entitlementPolicy.playbackLimitMs(record.kind),
         ),
     )
 
@@ -508,23 +539,44 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleFavourite(contentKey: String) {
         val profileId = _uiState.value.activeProfile?.id ?: return
+        val favourites = _uiState.value.local.favouriteKeysByProfile[profileId].orEmpty()
+        if (contentKey !in favourites && !entitlementPolicy.canAddFavourite(favourites.size)) {
+            showLockedFeature("More than ${EntitlementPolicy.FREE_FAVOURITE_LIMIT} favourites")
+            return
+        }
         viewModelScope.launch { stateStore.toggleFavourite(profileId, contentKey) }
     }
 
     fun addProfile(name: String) {
+        if (!entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Multiple profiles")
+            return
+        }
         viewModelScope.launch { stateStore.addProfile(name) }
     }
 
     fun selectProfile(profileId: String) {
+        if (profileId != _uiState.value.local.activeProfileId && !entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Switching profiles")
+            return
+        }
         _uiState.update { it.copy(unlockedCategoryKeys = emptySet(), overlay = OverlayScreen.NONE) }
         viewModelScope.launch { stateStore.setActiveProfile(profileId) }
     }
 
     fun removeProfile(profileId: String) {
+        if (!entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Editing profiles")
+            return
+        }
         viewModelScope.launch { stateStore.removeProfile(profileId) }
     }
 
     fun setProfilePin(pin: String) {
+        if (!entitlementPolicy.canUseParentalControls()) {
+            showLockedFeature("Parental controls")
+            return
+        }
         val profile = _uiState.value.activeProfile ?: return
         val updated = profile.copy(pinHash = if (pin.isBlank()) "" else SecureStateStore.hashPin(pin))
         _uiState.update { it.copy(unlockedCategoryKeys = emptySet()) }
@@ -532,6 +584,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleCategoryRestriction(categoryKey: String) {
+        if (!entitlementPolicy.canUseParentalControls()) {
+            showLockedFeature("Parental controls")
+            return
+        }
         val profile = _uiState.value.activeProfile ?: return
         val current = profile.restrictedCategoryKeys
         _uiState.update { it.copy(unlockedCategoryKeys = it.unlockedCategoryKeys - categoryKey) }
@@ -552,7 +608,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun isCategoryLocked(categoryKey: String): Boolean {
         val state = _uiState.value
-        return categoryKey in state.activeProfile?.restrictedCategoryKeys.orEmpty() &&
+        return state.parentalControlsEnabled &&
+            categoryKey in state.activeProfile?.restrictedCategoryKeys.orEmpty() &&
             categoryKey !in state.unlockedCategoryKeys
     }
 
