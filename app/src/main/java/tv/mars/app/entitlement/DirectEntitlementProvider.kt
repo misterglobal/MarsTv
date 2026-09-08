@@ -2,6 +2,8 @@ package tv.mars.app.entitlement
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.SerializationException
+import tv.mars.app.data.network.BackendHttpException
 import tv.mars.app.data.network.MarsLicensingApi
 import java.io.IOException
 import java.net.URI
@@ -30,8 +32,16 @@ internal class DirectEntitlementProvider(
             ready
         } catch (_: SecurityException) {
             activationFailure("This device could not create a secure activation identity")
-        } catch (_: Exception) {
+        } catch (error: BackendHttpException) {
+            activationFailure("Activation service returned HTTP ${error.statusCode}")
+        } catch (_: SerializationException) {
+            activationFailure("Activation service returned malformed JSON")
+        } catch (_: IllegalArgumentException) {
+            activationFailure("Activation service returned invalid session details")
+        } catch (_: IOException) {
             activationFailure("Could not contact the MarsTV activation service")
+        } catch (_: Exception) {
+            activationFailure("Activation failed unexpectedly")
         }
     }
 
