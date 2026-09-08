@@ -1,5 +1,6 @@
 package tv.mars.app.entitlement
 
+import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
@@ -21,4 +22,4 @@ internal class DebugEntitlementProvider : EntitlementProvider {
     override suspend fun restore(): EntitlementResult = EntitlementResult.Unchanged(current.value)
 }
 
-internal fun createEntitlementManager(): EntitlementManager = DefaultEntitlementManager(DebugEntitlementProvider())
+internal fun createEntitlementManager(context: Context): EntitlementManager = DefaultEntitlementManager(DebugEntitlementProvider())

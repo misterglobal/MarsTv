@@ -114,7 +114,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
-    private val entitlementManager: EntitlementManager = createEntitlementManager()
+    private val entitlementManager: EntitlementManager = createEntitlementManager(application)
     private val entitlementPolicy = EntitlementPolicy(entitlementManager)
     private var catalogJob: Job? = null
     private var catalogJobAccountId: String? = null
@@ -125,6 +125,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     val privatePortalConfigured: Boolean get() = BuildConfig.PRIVATE_PORTAL_URL.isNotBlank()
 
     init {
+        viewModelScope.launch { entitlementManager.restore() }
         viewModelScope.launch {
             entitlementManager.state.collectLatest { entitlement ->
                 _uiState.update { it.copy(entitlementState = entitlement) }

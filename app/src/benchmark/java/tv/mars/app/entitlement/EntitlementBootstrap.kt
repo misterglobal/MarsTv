@@ -1,3 +1,5 @@
 package tv.mars.app.entitlement
 
-internal fun createEntitlementManager(): EntitlementManager = DefaultEntitlementManager(FreeEntitlementProvider())
+import android.content.Context
+
+internal fun createEntitlementManager(context: Context): EntitlementManager = DefaultEntitlementManager(FreeEntitlementProvider())
