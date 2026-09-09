@@ -143,6 +143,6 @@ $apkAvailable = is_string(config('apk_url')) && config('apk_url') !== '';
   </main>
   <footer><div class="shell footer-grid"><div><a class="brand" href="/"><img src="/assets/marstv-logo.svg" alt="MarsTV"></a><p>Your channels. One orbit.</p></div><div><strong>Product</strong><a href="/download">Download</a><a href="/activate">Activate Pro</a><a href="/support">Support</a></div><div><strong>Legal</strong><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/refunds">Refunds</a></div></div><div class="shell footer-bottom"><span>© <?= date('Y') ?> MarsTV</span><span>Player only. No content included.</span></div></footer>
   <script nonce="<?= e(nonce()) ?>">window.MARS_CONFIG={apiBase:<?= json_encode($apiBase, JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>,termsVersion:<?= json_encode((string) config('legal_terms_version'), JSON_HEX_TAG|JSON_HEX_AMP|JSON_HEX_APOS|JSON_HEX_QUOT) ?>};</script>
-  <script src="/assets/app.js" defer></script>
+  <script src="/assets/app.js?v=20260908-7" defer></script>
 </body>
 </html>

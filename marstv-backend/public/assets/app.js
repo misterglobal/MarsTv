@@ -27,6 +27,8 @@
   let redemption = null;
   let expiryTimer = null;
   let freemiusLoader = null;
+  let freemiusHandler = null;
+  let checkoutOpen = false;
   let purchaseClaim = null;
 
   const params = new URLSearchParams(location.search);
@@ -65,6 +67,7 @@
         method: 'POST',
         body: { credentialType: credential.type, credential: credential.value }
       });
+      storeRedemption(redemption);
       credential = null;
       showStep(3);
     } catch (reason) {
@@ -75,13 +78,24 @@
   });
 
   checkoutButton?.addEventListener('click', async () => {
-    if (!redemption?.csrfToken) return showError('Session unavailable', 'Generate a new activation code in MarsTV and try again.');
+    if (checkoutOpen) return;
+    redemption ||= restoreRedemption();
+    if (!redemption?.csrfToken) {
+      try {
+        redemption = await api('/activation-sessions/resume', { method: 'POST', body: {} });
+        if (!redemption?.csrfToken) throw new ApiError('MALFORMED_API_RESPONSE', 502);
+        storeRedemption(redemption);
+      } catch (reason) {
+        return showApiError(reason);
+      }
+    }
     if (!legalAcceptance?.checked) {
       legalError.textContent = 'Accept the legal-use terms before continuing.';
       legalAcceptance?.focus();
       return;
     }
     legalError.textContent = '';
+    checkoutOpen = true;
     setButtonBusy(checkoutButton, true, 'Opening checkout…');
     try {
       const result = await api('/checkout/create', {
@@ -96,8 +110,8 @@
       if (result.provider !== 'freemius' || !result.checkout) throw new ApiError('INVALID_CHECKOUT_CONFIGURATION', 502);
       await loadFreemius();
       openFreemius(result.checkout);
-      setButtonBusy(checkoutButton, false, 'Accept and continue to checkout');
     } catch (reason) {
+      checkoutOpen = false;
       showApiError(reason);
       setButtonBusy(checkoutButton, false, 'Accept and continue to checkout');
     }
@@ -138,8 +152,17 @@
       redirect: 'error'
     });
     let payload = {};
-    try { payload = await response.json(); } catch (_) { /* normalized below */ }
-    if (!response.ok) throw new ApiError(payload.code || 'SERVICE_TEMPORARILY_UNAVAILABLE', response.status, payload.message, response.headers.get('Retry-After'));
+    let parsed = true;
+    try { payload = await response.json(); } catch (_) { parsed = false; }
+    if (!response.ok) throw new ApiError(
+      payload.code || 'SERVICE_TEMPORARILY_UNAVAILABLE',
+      response.status,
+      payload.message,
+      response.headers.get('Retry-After'),
+      payload.reference || response.headers.get('X-Mars-Error-Reference'),
+      [response.headers.get('X-Mars-Error-Type'), response.headers.get('X-Mars-Error-Location')].filter(Boolean).join(' at ')
+    );
+    if (!parsed) throw new ApiError('MALFORMED_API_RESPONSE', 502);
     return payload;
   }
 
@@ -173,8 +196,8 @@
       gdpr: 'default'
     };
     if (config.sandbox) options.sandbox = config.sandbox;
-    const handler = new window.FS.Checkout(options);
-    handler.open({
+    freemiusHandler ||= new window.FS.Checkout(options);
+    freemiusHandler.open({
       name: 'MarsTV Pro',
       licenses: 1,
       purchaseCompleted: (response) => {
@@ -190,7 +213,10 @@
         }
         location.assign('/payment/success');
       },
-      cancel: () => setButtonBusy(checkoutButton, false, 'Accept and continue to checkout')
+      cancel: () => {
+        checkoutOpen = false;
+        setButtonBusy(checkoutButton, false, 'Accept and continue to checkout');
+      }
     });
   }
 
@@ -212,8 +238,8 @@
   }
 
   class ApiError extends Error {
-    constructor(code, status, message, retryAfter) {
-      super(message || code); this.code = code; this.status = status; this.retryAfter = retryAfter;
+    constructor(code, status, message, retryAfter, reference, diagnostic) {
+      super(message || code); this.code = code; this.status = status; this.retryAfter = retryAfter; this.reference = reference; this.diagnostic = diagnostic;
     }
   }
 
@@ -240,6 +266,11 @@
       ACTIVATION_REDEEMED: 'This activation session was already opened in another browser. Generate a new code in MarsTV.',
       ACTIVATION_RATE_LIMITED: `Too many attempts. Try again${reason?.retryAfter ? ` in ${reason.retryAfter} seconds` : ' shortly'}.`,
       CHECKOUT_DISABLED: 'Purchases are not available yet. Please check back after the Pro launch.',
+      CHECKOUT_PRODUCT_ID_MISSING: 'Checkout configuration is missing the Freemius product ID.',
+      CHECKOUT_PLAN_ID_MISSING: 'Checkout configuration is missing the Freemius plan ID.',
+      CHECKOUT_PUBLIC_KEY_MISSING: 'Checkout configuration is missing the Freemius public key.',
+      CHECKOUT_SECRET_KEY_MISSING: 'Checkout configuration is missing the Freemius secret key.',
+      MALFORMED_API_RESPONSE: 'The activation service returned an unreadable response. Please try again.',
       LEGAL_ACCEPTANCE_REQUIRED: 'Accept the legal-use terms before opening checkout.',
       PURCHASE_ALREADY_CLAIMED: 'This purchase is already linked to another activation. Contact support before paying again.',
       CHECKOUT_LOAD_FAILED: 'Secure checkout could not load. Check your connection or content blocker and try again.',
@@ -248,7 +279,10 @@
       INVALID_CHECKOUT_URL: 'The checkout provider returned an invalid address. No payment was taken.',
       SERVICE_TEMPORARILY_UNAVAILABLE: 'The activation service could not be reached. Your free player is unaffected; try again shortly.'
     };
-    return messages[reason?.code] || 'We could not verify this activation session. Generate a new code in MarsTV and try again.';
+    const message = messages[reason?.code] || 'We could not verify this activation session. Generate a new code in MarsTV and try again.';
+    const reference = reason?.reference ? ` Reference: ${reason.reference}.` : '';
+    const diagnostic = reason?.diagnostic ? ` Diagnostic: ${reason.diagnostic}.` : '';
+    return `${message}${reference}${diagnostic}`;
   }
 
   function showStep(number) {
@@ -263,7 +297,27 @@
     showStep('error');
   }
 
+  function storeRedemption(value) {
+    if (!value?.csrfToken || !value?.expiresAt) return;
+    try { sessionStorage.setItem('marstv_redemption', JSON.stringify(value)); } catch (_) { /* storage unavailable */ }
+  }
+
+  function restoreRedemption() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem('marstv_redemption') || 'null');
+      const expiresAt = Date.parse(value?.expiresAt || '');
+      if (value?.csrfToken && Number.isFinite(expiresAt) && expiresAt > Date.now()) return value;
+    } catch (_) { /* invalid or unavailable storage */ }
+    clearStoredRedemption();
+    return null;
+  }
+
+  function clearStoredRedemption() {
+    try { sessionStorage.removeItem('marstv_redemption'); } catch (_) { /* storage unavailable */ }
+  }
+
   function reset() {
+    clearStoredRedemption();
     clearInterval(expiryTimer);
     credential = null; redemption = null;
     input.value = ''; input.classList.remove('invalid'); error.textContent = '';

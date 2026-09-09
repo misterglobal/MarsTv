@@ -147,6 +147,7 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
             HomeTopBar(
                 accountName = state.activeAccount?.name.orEmpty(),
                 profileName = state.activeProfile?.name.orEmpty(),
+                isPro = state.isPro,
                 onProfiles = viewModel::showProfiles,
             )
             ErrorBanner(
@@ -184,13 +185,13 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
 }
 
 @Composable
-private fun HomeTopBar(accountName: String, profileName: String, onProfiles: () -> Unit) {
+private fun HomeTopBar(accountName: String, profileName: String, isPro: Boolean, onProfiles: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().height(70.dp).background(MarsMidnight).padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        MarsLogo(compact = true)
+        MarsLogo(compact = true, isPro = isPro)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(accountName, color = MarsMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             Spacer(Modifier.width(14.dp))

@@ -14,8 +14,9 @@ header('Referrer-Policy: no-referrer');
 
 function api_response(array $payload, int $status = 200): never
 {
+    $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     http_response_code($status);
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    echo $body;
     exit;
 }
 
@@ -62,6 +63,7 @@ try {
         $path === '/api/v1/activation-sessions' => $deviceApi->refreshActivation(request_headers_lower(), $rawBody, $clientIp),
         $path === '/api/v1/activation-sessions/preview' => $api->preview($input, $clientIp),
         $path === '/api/v1/activation-sessions/redeem' => $api->redeem($input, $clientIp),
+        $path === '/api/v1/activation-sessions/resume' => $api->resume($_COOKIE, $clientIp),
         $path === '/api/v1/checkout/create' => $api->checkout($input, request_headers_lower(), $_COOKIE, $clientIp),
         $path === '/api/v1/checkout/freemius/claim' => $api->claim($input, request_headers_lower(), $_COOKIE, $clientIp),
         default => throw new ApiProblem('INVALID_REQUEST', 404),
@@ -72,6 +74,21 @@ try {
 } catch (JsonException) {
     api_response(['code' => 'INVALID_REQUEST'], 400);
 } catch (Throwable $error) {
-    error_log('MarsTV API failure: '.get_class($error));
-    api_response(['code' => 'SERVICE_TEMPORARILY_UNAVAILABLE'], 503);
+    $reference = strtoupper(bin2hex(random_bytes(4)));
+    $entry = sprintf(
+        "[%s] reference=%s type=%s code=%s file=%s line=%d message=%s\n",
+        gmdate('c'),
+        $reference,
+        get_class($error),
+        (string) $error->getCode(),
+        basename($error->getFile()),
+        $error->getLine(),
+        str_replace(["\r", "\n"], ' ', $error->getMessage()),
+    );
+    error_log(trim($entry));
+    @error_log($entry, 3, dirname(__DIR__).'/storage/logs/api-errors.log');
+    header('X-Mars-Error-Reference: '.$reference);
+    header('X-Mars-Error-Type: '.str_replace('\\', '.', get_class($error)));
+    header('X-Mars-Error-Location: '.basename($error->getFile()).':'.$error->getLine());
+    api_response(['code' => 'SERVICE_TEMPORARILY_UNAVAILABLE', 'reference' => $reference], 503);
 }

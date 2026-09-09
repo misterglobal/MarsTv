@@ -2,5 +2,7 @@
 /vendor/
 /storage/logs/*
 !/storage/logs/.gitkeep
+/storage/webhooks/*
+!/storage/webhooks/.gitkeep
 /public/error_log
 /.phpunit.cache/

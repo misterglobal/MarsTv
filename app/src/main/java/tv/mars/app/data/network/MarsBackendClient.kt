@@ -14,7 +14,7 @@ class MarsBackendClient(baseUrl: String) {
 
     val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(Duration.ofSeconds(10))
-        .readTimeout(Duration.ofSeconds(45))
+        .readTimeout(Duration.ofSeconds(100))
         .writeTimeout(Duration.ofSeconds(15))
         // The production shared host advertises HTTP/2 but can close its upgraded
         // response stream before OkHttp receives the JSON body.
@@ -27,6 +27,10 @@ class MarsBackendClient(baseUrl: String) {
         require(path.startsWith('/') && !path.contains("://")) { "Backend path must be canonical" }
         val url = baseUrl.newBuilder().encodedPath(path).query(null).build()
         require(url.isHttps && url.host == baseUrl.host) { "Backend request escaped configured origin" }
-        return Request.Builder().url(url)
+        return Request.Builder()
+            .url(url)
+            // Some shared-host gzip responses are closed before their final frame.
+            // Licensing payloads are tiny, so request an uncompressed response.
+            .header("Accept-Encoding", "identity")
     }
 }

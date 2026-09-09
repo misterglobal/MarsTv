@@ -88,9 +88,10 @@ final class ActivationApi
 
         $publicKey = (string) config('freemius_public_key');
         $secretKey = (string) config('freemius_secret_key');
-        if ($publicKey === '' || $secretKey === '') {
-            throw new ApiProblem('SERVICE_TEMPORARILY_UNAVAILABLE', 503);
-        }
+        if ((string) config('freemius_product_id') === '') throw new ApiProblem('CHECKOUT_PRODUCT_ID_MISSING', 503);
+        if ((string) config('freemius_plan_id') === '') throw new ApiProblem('CHECKOUT_PLAN_ID_MISSING', 503);
+        if ($publicKey === '') throw new ApiProblem('CHECKOUT_PUBLIC_KEY_MISSING', 503);
+        if ($secretKey === '') throw new ApiProblem('CHECKOUT_SECRET_KEY_MISSING', 503);
 
         $attemptId = (string) ($session['checkout_attempt_id'] ?? '');
         if ($attemptId === '') $attemptId = $this->uuid();
@@ -135,6 +136,28 @@ final class ActivationApi
             'checkout' => $checkout,
             'termsVersion' => $termsVersion,
         ];
+    }
+
+    public function resume(array $cookies, string $clientIp): array
+    {
+        $this->limit('activation_resume_ip', $clientIp, 10, 600);
+        $browserToken = (string) ($cookies['marstv_activation'] ?? '');
+        if ($browserToken === '') throw new ApiProblem('ACTIVATION_EXPIRED', 410);
+
+        $csrfToken = $this->token();
+        $statement = $this->db->prepare(
+            "UPDATE activation_sessions
+             SET csrf_token_hash=:csrf_hash
+             WHERE browser_session_hash=:browser_hash
+               AND status IN ('redeemed','checkout_created')
+               AND browser_session_expires_at > UTC_TIMESTAMP()"
+        );
+        $statement->execute([
+            'csrf_hash' => hash('sha256', $csrfToken),
+            'browser_hash' => hash('sha256', $browserToken),
+        ]);
+        if ($statement->rowCount() !== 1) throw new ApiProblem('ACTIVATION_EXPIRED', 410);
+        return ['status' => 'redeemed', 'csrfToken' => $csrfToken];
     }
 
     public function claim(array $input, array $headers, array $cookies, string $clientIp): array

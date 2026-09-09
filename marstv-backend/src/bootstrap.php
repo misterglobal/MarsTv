@@ -32,10 +32,11 @@ function load_private_env(string $path): void
             $value = substr($value, 1, -1);
         }
 
-        if (getenv($name) === false) {
-            putenv($name.'='.$value);
-            $_ENV[$name] = $value;
-        }
+        // This file is the deployment's private configuration source. Shared
+        // hosts may inject empty or stale process variables, so values that are
+        // explicitly present here must take precedence.
+        putenv($name.'='.$value);
+        $_ENV[$name] = $value;
     }
 }
 
@@ -76,6 +77,8 @@ function config(string $key): mixed
         'freemius_public_key' => env_value('FREEMIUS_PUBLIC_KEY'),
         'freemius_secret_key' => env_value('FREEMIUS_SECRET_KEY'),
         'freemius_api_bearer_token' => env_value('FREEMIUS_API_BEARER_TOKEN'),
+        'freemius_amount_minor' => (int) env_value('FREEMIUS_AMOUNT_MINOR', '1299'),
+        'freemius_currency' => strtoupper((string) env_value('FREEMIUS_CURRENCY', 'USD')),
     ];
     return $values[$key] ?? null;
 }
@@ -119,7 +122,8 @@ function send_security_headers(string $page = ''): void
     $nonce = nonce();
     $freemius = $page === 'activate' ? ' https://checkout.freemius.com' : '';
     $frameSrc = $page === 'activate' ? "frame-src https://checkout.freemius.com; " : "frame-src 'none'; ";
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$nonce}'{$freemius}; style-src 'self'; img-src 'self' data: https://checkout.freemius.com; connect-src 'self'{$freemius}; font-src 'self'; {$frameSrc}frame-ancestors 'none'; form-action 'self' https://checkout.freemius.com; base-uri 'none'; object-src 'none'; upgrade-insecure-requests");
+    $styleSrc = $page === 'activate' ? "style-src 'self' 'unsafe-inline' https://checkout.freemius.com;" : "style-src 'self';";
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$nonce}'{$freemius}; {$styleSrc} img-src 'self' data: https://checkout.freemius.com; connect-src 'self'{$freemius}; font-src 'self'; {$frameSrc}frame-ancestors 'none'; form-action 'self' https://checkout.freemius.com; base-uri 'none'; object-src 'none'; upgrade-insecure-requests");
     header('Referrer-Policy: no-referrer');
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');

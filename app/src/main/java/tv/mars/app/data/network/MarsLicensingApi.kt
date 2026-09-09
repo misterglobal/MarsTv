@@ -7,6 +7,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
+import okio.BufferedSource
 import tv.mars.app.entitlement.DeviceChallenge
 import tv.mars.app.entitlement.DeviceIdentity
 import java.io.IOException
@@ -133,8 +135,7 @@ class MarsLicensingApi(private val backend: MarsBackendClient) {
             if (!response.isSuccessful) throw BackendHttpException(response.code)
             val declaredLength = response.body.contentLength()
             if (declaredLength > MAX_JSON_BYTES) throw IOException("Backend response exceeded limit")
-            val responseBytes = response.body.source().readByteArray(MAX_JSON_BYTES.toLong() + 1)
-            if (responseBytes.size > MAX_JSON_BYTES) throw IOException("Backend response exceeded limit")
+            val responseBytes = response.body.source().readLimitedByteArray(MAX_JSON_BYTES)
             val responseBody = responseBytes.toString(Charsets.UTF_8)
             json.decodeFromString(serializer, responseBody)
         }
@@ -144,3 +145,14 @@ class MarsLicensingApi(private val backend: MarsBackendClient) {
 }
 
 class BackendHttpException(val statusCode: Int) : IOException("MarsTV backend returned HTTP $statusCode")
+
+internal fun BufferedSource.readLimitedByteArray(maximumBytes: Int): ByteArray {
+    require(maximumBytes >= 0)
+    val buffer = Buffer()
+    while (buffer.size <= maximumBytes) {
+        val remaining = maximumBytes.toLong() + 1 - buffer.size
+        val read = read(buffer, minOf(8192L, remaining))
+        if (read == -1L) return buffer.readByteArray()
+    }
+    throw IOException("Backend response exceeded limit")
+}

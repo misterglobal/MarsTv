@@ -5,10 +5,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerializationException
 import tv.mars.app.data.network.BackendHttpException
 import tv.mars.app.data.network.MarsLicensingApi
+import java.io.EOFException
 import java.io.IOException
+import java.net.ConnectException
+import java.net.ProtocolException
 import java.net.URI
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.Instant
+import javax.net.ssl.SSLException
 
 internal class DirectEntitlementProvider(
     private val store: EntitlementStore,
@@ -41,8 +46,18 @@ internal class DirectEntitlementProvider(
             activationFailure("Activation service returned invalid session details")
         } catch (_: SocketTimeoutException) {
             activationFailure("MarsTV activation timed out. Please try again")
-        } catch (_: IOException) {
-            activationFailure("Could not contact the MarsTV activation service")
+        } catch (_: UnknownHostException) {
+            activationFailure("MarsTV activation DNS lookup failed")
+        } catch (_: SSLException) {
+            activationFailure("MarsTV activation TLS connection failed")
+        } catch (_: ConnectException) {
+            activationFailure("MarsTV activation connection was refused or reset")
+        } catch (_: EOFException) {
+            activationFailure("MarsTV activation response ended early")
+        } catch (_: ProtocolException) {
+            activationFailure("MarsTV activation response was incomplete")
+        } catch (error: IOException) {
+            activationFailure("MarsTV activation network error (${error.javaClass.simpleName})")
         } catch (_: Exception) {
             activationFailure("Activation failed unexpectedly")
         }

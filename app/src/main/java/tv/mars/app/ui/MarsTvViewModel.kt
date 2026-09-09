@@ -284,14 +284,13 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         catalogJobAccountId = account.id
         Log.i(BENCHMARK_TAG, "catalog_start mode=${if (force) "refresh" else "load"} source=${account.sourceType}")
         catalogJob = viewModelScope.launch {
-            _uiState.update {
-                it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null, selectedSeries = null)
-            }
-            
+            _uiState.update { it.copy(errorMessage = null, selectedSeries = null) }
+
             if (!force) {
                 val dayMs = 24 * 60 * 60 * 1000L
                 val roomLoadedAt = repository.catalogLoadedAt(account.id)
                 if (roomLoadedAt != null && System.currentTimeMillis() - roomLoadedAt < dayMs) {
+                    Log.i(BENCHMARK_TAG, "catalog_cache_hit source=room")
                     _uiState.update {
                         it.copy(
                             loadedCatalogAccountId = account.id,
@@ -327,6 +326,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
+            Log.i(BENCHMARK_TAG, "catalog_cache_miss refresh=true")
             _uiState.update { it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null) }
 
             runCatching { repository.refreshCatalog(account) }
