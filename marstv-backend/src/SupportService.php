@@ -29,8 +29,13 @@ final class SupportService
             $purchase->execute(['order_id' => $orderId, 'session' => $sessionId]);
             $purchaseId = (int) $this->db->lastInsertId();
             $licenseUuid = self::uuid();
-            $insertLicense = $this->db->prepare("INSERT INTO licenses (license_uuid,purchase_id,current_device_id,plan_id,status,license_version) VALUES (:uuid,:purchase,:device,'pro_lifetime_v1','active',1)");
-            $insertLicense->execute(['uuid' => $licenseUuid, 'purchase' => $purchaseId, 'device' => $device['id']]);
+            $insertLicense = $this->db->prepare("INSERT INTO licenses (license_uuid,purchase_id,current_device_id,plan_id,provider_license_id,status,license_version) VALUES (:uuid,:purchase,:device,'pro_lifetime_v1',:provider_license,'active',1)");
+            $insertLicense->execute([
+                'uuid' => $licenseUuid,
+                'purchase' => $purchaseId,
+                'device' => $device['id'],
+                'provider_license' => 'support_test_'.$licenseUuid,
+            ]);
             $licenseId = (int) $this->db->lastInsertId();
             $assignment = $this->db->prepare("INSERT INTO license_assignments (license_id,device_id,assignment_reason) VALUES (:license,:device,'support_test')");
             $assignment->execute(['license' => $licenseId, 'device' => $device['id']]);

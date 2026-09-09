@@ -100,8 +100,8 @@ final class FreemiusWebhook
             $purchaseQuery = $this->db->prepare("SELECT id FROM purchases WHERE provider='freemius' AND provider_order_id=:payment LIMIT 1 FOR UPDATE");
             $purchaseQuery->execute(['payment' => $paymentId]);
             $purchaseId = (int) $purchaseQuery->fetchColumn();
-            $license = $this->db->prepare("INSERT INTO licenses (license_uuid,purchase_id,current_device_id,plan_id,status,license_version) VALUES (:uuid,:purchase,:device,:plan,'active',1) ON DUPLICATE KEY UPDATE status='active'");
-            $license->execute(['uuid' => self::uuid(), 'purchase' => $purchaseId, 'device' => $row['device_id'], 'plan' => $planId]);
+            $license = $this->db->prepare("INSERT INTO licenses (license_uuid,purchase_id,current_device_id,plan_id,provider_license_id,status,license_version) VALUES (:uuid,:purchase,:device,:plan,:provider_license,'active',1) ON DUPLICATE KEY UPDATE provider_license_id=VALUES(provider_license_id),status='active'");
+            $license->execute(['uuid' => self::uuid(), 'purchase' => $purchaseId, 'device' => $row['device_id'], 'plan' => $planId, 'provider_license' => $licenseId]);
             $licenseQuery = $this->db->prepare('SELECT id FROM licenses WHERE purchase_id=:purchase LIMIT 1 FOR UPDATE');
             $licenseQuery->execute(['purchase' => $purchaseId]);
             $localLicenseId = (int) $licenseQuery->fetchColumn();
