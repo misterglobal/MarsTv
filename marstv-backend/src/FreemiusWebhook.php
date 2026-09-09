@@ -30,11 +30,17 @@ final class FreemiusWebhook
         $id = $this->identifier($event['id'] ?? null);
         $type = (string) ($event['type'] ?? '');
         $payment = $event['objects']['payment'] ?? null;
+        $dispute = $event['objects']['dispute'] ?? null;
         if ($type !== 'payment.created' && !isset(self::TERMINAL_EVENT_STATES[$type]) && !in_array($type, self::RECONCILIATION_EVENTS, true)) {
             return $this->recordIgnored($id, $type, $event, $rawBody);
         }
-        if (!is_array($payment)) throw new ApiProblem('INVALID_REQUEST', 400);
-        $fields = $this->paymentFields($event, $payment);
+        if (str_starts_with($type, 'payment.dispute.')) {
+            if (!is_array($dispute)) throw new ApiProblem('INVALID_REQUEST', 400);
+            $fields = $this->disputeFields($dispute);
+        } else {
+            if (!is_array($payment)) throw new ApiProblem('INVALID_REQUEST', 400);
+            $fields = $this->paymentFields($event, $payment);
+        }
         $this->validatePayment($fields['product_id'], $fields['plan_id'], $fields['currency'], $fields['amount_minor'], $fields['environment']);
 
         [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency'], $fields['environment']);
@@ -157,6 +163,42 @@ final class FreemiusWebhook
             'plan_id' => $this->identifier($payment['plan_id'] ?? null),
             'currency' => strtoupper((string) ($payment['currency'] ?? '')),
             'amount_minor' => $this->amountMinor($payment['gross'] ?? null),
+            'environment' => $environment,
+        ];
+    }
+
+    private function disputeFields(array $dispute): array
+    {
+        $environment = filter_var($dispute['environment'] ?? null, FILTER_VALIDATE_INT);
+        $amountMinor = filter_var($dispute['amount'] ?? null, FILTER_VALIDATE_INT);
+        if ($environment === false || $amountMinor === false || $amountMinor < 0) {
+            throw new ApiProblem('INVALID_REQUEST', 400);
+        }
+        $paymentId = $this->identifier($dispute['payment_id'] ?? null);
+        $productId = $this->identifier($dispute['plugin_id'] ?? null);
+        $query = $this->db->prepare(
+            "SELECT p.product_id,p.amount_minor,p.currency,l.provider_license_id,l.plan_id
+             FROM purchases p
+             JOIN licenses l ON l.purchase_id=p.id
+             WHERE p.provider='freemius' AND p.provider_order_id=:payment
+             LIMIT 1"
+        );
+        $query->execute(['payment' => $paymentId]);
+        $local = $query->fetch();
+        if (!$local) throw new ApiProblem('WEBHOOK_PAYMENT_MISMATCH', 422);
+        $currency = strtoupper((string) ($dispute['currency'] ?? ''));
+        if ($productId !== (string) $local['product_id'] ||
+            $amountMinor !== (int) $local['amount_minor'] ||
+            $currency !== strtoupper((string) $local['currency'])) {
+            throw new ApiProblem('WEBHOOK_PAYMENT_MISMATCH', 422);
+        }
+        return [
+            'product_id' => $productId,
+            'payment_id' => $paymentId,
+            'license_id' => $this->identifier($local['provider_license_id'] ?? null),
+            'plan_id' => $this->identifier($local['plan_id'] ?? null),
+            'currency' => $currency,
+            'amount_minor' => $amountMinor,
             'environment' => $environment,
         ];
     }
