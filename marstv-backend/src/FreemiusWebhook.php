@@ -76,6 +76,43 @@ final class FreemiusWebhook
         );
     }
 
+    public function processDue(int $limit = 25): array
+    {
+        if ($limit < 1 || $limit > 100) throw new InvalidArgumentException('Worker limit must be between 1 and 100');
+        $lock = $this->db->query("SELECT GET_LOCK('marstv_freemius_webhook_worker',0)")->fetchColumn();
+        if ((int) $lock !== 1) return ['status' => 'locked', 'attempted' => 0, 'processed' => 0, 'failed' => 0];
+        $result = ['status' => 'completed', 'attempted' => 0, 'processed' => 0, 'failed' => 0];
+        try {
+            $query = $this->db->query(
+                "SELECT provider_event_id
+                 FROM webhook_events
+                 WHERE provider='freemius'
+                   AND processing_status='retry_wait'
+                   AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())
+                 ORDER BY received_at,id
+                 LIMIT {$limit}"
+            );
+            foreach ($query->fetchAll(PDO::FETCH_COLUMN) as $providerEventId) {
+                $result['attempted']++;
+                try {
+                    $outcome = $this->replay((string) $providerEventId);
+                    if (in_array($outcome['status'] ?? '', ['processed', 'duplicate'], true)) $result['processed']++;
+                    else $result['failed']++;
+                } catch (Throwable) {
+                    $result['failed']++;
+                    $this->scheduleReplayFailure((string) $providerEventId);
+                }
+            }
+            return $result;
+        } finally {
+            try {
+                $this->writeWorkerHeartbeat($result);
+            } finally {
+                $this->db->query("SELECT RELEASE_LOCK('marstv_freemius_webhook_worker')");
+            }
+        }
+    }
+
     public static function validSignature(string $body, string $signature, string $secret): bool
     {
         return $secret !== '' && preg_match('/^[a-f0-9]{64}$/Di', $signature) === 1 &&
@@ -114,9 +151,31 @@ final class FreemiusWebhook
             return ['status' => 'processed'];
         } catch (Throwable $error) {
             if ($this->db->inTransaction()) $this->db->rollBack();
-            $this->db->prepare("UPDATE webhook_events SET processing_status='retry_wait',processing_attempts=processing_attempts+1,next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 MINUTE),last_error_code='FULFILLMENT_FAILED' WHERE id=:id")->execute(['id' => $eventId]);
+            $this->db->prepare("UPDATE webhook_events SET processing_status='retry_wait',next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL (CASE WHEN processing_attempts=0 THEN 1 WHEN processing_attempts=1 THEN 5 WHEN processing_attempts=2 THEN 15 ELSE 60 END) MINUTE),processing_attempts=processing_attempts+1,last_error_code='FULFILLMENT_FAILED' WHERE id=:id")->execute(['id' => $eventId]);
             throw $error;
         }
+    }
+
+    private function scheduleReplayFailure(string $providerEventId): void
+    {
+        $statement = $this->db->prepare(
+            "UPDATE webhook_events
+             SET next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL (CASE WHEN processing_attempts=0 THEN 1 WHEN processing_attempts=1 THEN 5 WHEN processing_attempts=2 THEN 15 ELSE 60 END) MINUTE),
+                 processing_attempts=processing_attempts+1,
+                 last_error_code='REPLAY_FAILED'
+             WHERE provider='freemius'
+               AND provider_event_id=:event
+               AND processing_status='retry_wait'
+               AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())"
+        );
+        $statement->execute(['event' => $providerEventId]);
+    }
+
+    private function writeWorkerHeartbeat(array $result): void
+    {
+        $path = dirname(__DIR__).'/storage/logs/webhook-worker-heartbeat.json';
+        $payload = json_encode(['ran_at' => gmdate('c')] + $result, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        if (file_put_contents($path, $payload, LOCK_EX) === false) throw new RuntimeException('Webhook worker heartbeat could not be written');
     }
 
     private function ingest(string $id, string $type, string $created, string $hash, string $reference, string $storedHash): array

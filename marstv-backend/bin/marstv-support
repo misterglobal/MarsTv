@@ -12,7 +12,7 @@ $command = $argv[1] ?? '';
 $options = [];
 foreach (array_slice($argv, 2) as $argument) {
     if ($argument === '--override-transfer-limit') { $options['override-transfer-limit'] = true; continue; }
-    if (preg_match('/^--(device|operator|reason|order|license|new-device|event)=(.*)$/sD', $argument, $match)) $options[$match[1]] = $match[2];
+    if (preg_match('/^--(device|operator|reason|order|license|new-device|event|limit)=(.*)$/sD', $argument, $match)) $options[$match[1]] = $match[2];
 }
 try {
     $service = new SupportService(database());
@@ -37,6 +37,11 @@ try {
     } elseif ($command === 'webhook:replay') {
         $result = $service->replayWebhook((string) ($options['event'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
         fwrite(STDOUT, "Webhook replay outcome: {$result['status']}\n");
+    } elseif ($command === 'webhook:work') {
+        $limit = filter_var($options['limit'] ?? 25, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 100]]);
+        if ($limit === false) throw new InvalidArgumentException('Worker limit must be between 1 and 100');
+        $result = (new FreemiusWebhook(database()))->processDue($limit);
+        fwrite(STDOUT, json_encode($result, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
     } else {
         throw new InvalidArgumentException(
             "Commands:\n".
@@ -44,7 +49,8 @@ try {
             "  purchase:lookup --order=PROVIDER_ORDER_ID\n".
             "  license:transfer --license=UUID --new-device=MARS-XXXX --operator=NAME --reason=TEXT [--override-transfer-limit]\n".
             "  license:revoke --license=UUID --operator=NAME --reason=TEXT\n".
-            "  webhook:replay --event=PROVIDER_EVENT_ID --operator=NAME --reason=TEXT"
+            "  webhook:replay --event=PROVIDER_EVENT_ID --operator=NAME --reason=TEXT\n".
+            "  webhook:work [--limit=25]"
         );
     }
     exit(0);

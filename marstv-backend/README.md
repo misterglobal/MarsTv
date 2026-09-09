@@ -28,9 +28,12 @@ php bin/marstv-support purchase:lookup --order=PROVIDER_ORDER_ID
 php bin/marstv-support license:transfer --license=UUID --new-device=MARS-XXXX --operator=YOUR_ID --reason="verified replacement"
 php bin/marstv-support license:revoke --license=UUID --operator=YOUR_ID --reason="verified support request"
 php bin/marstv-support webhook:replay --event=PROVIDER_EVENT_ID --operator=YOUR_ID --reason="retry after corrected outage"
+php bin/marstv-support webhook:work --limit=25
 ```
 
 Transfers enforce the published rolling limits. The override flag is reserved for documented, reviewed exceptions and is written to `support_actions`. Apply every numbered database migration before deploying matching application code.
+
+Run `webhook:work` every minute from one cron entry. The worker uses a database advisory lock, processes only due `retry_wait` events in a bounded batch, applies increasing retry delays, and writes a redacted heartbeat to `storage/logs/webhook-worker-heartbeat.json`.
 
 ## Current status
 
