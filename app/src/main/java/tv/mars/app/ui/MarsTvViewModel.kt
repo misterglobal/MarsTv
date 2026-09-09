@@ -8,12 +8,16 @@ import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import tv.mars.app.BuildConfig
@@ -36,6 +40,12 @@ import tv.mars.app.data.local.SecureStateStore
 import tv.mars.app.data.local.MarsTvDatabase
 import tv.mars.app.data.local.RoomCatalogStore
 import tv.mars.app.data.repository.IptvRepository
+import tv.mars.app.entitlement.EntitlementManager
+import tv.mars.app.entitlement.ActivationState
+import tv.mars.app.entitlement.EntitlementPolicy
+import tv.mars.app.entitlement.EntitlementState
+import tv.mars.app.entitlement.ProFeature
+import tv.mars.app.entitlement.createEntitlementManager
 
 data class MarsUiState(
     val local: LocalState = LocalState(),
@@ -52,6 +62,9 @@ data class MarsUiState(
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val unlockedCategoryKeys: Set<String> = emptySet(),
+    val entitlementState: EntitlementState = EntitlementState.Loading,
+    val activationState: ActivationState = ActivationState.Idle,
+    val lockedFeatureName: String? = null,
 ) {
     val activeAccount: IptvAccount?
         get() = local.accounts.firstOrNull { it.id == local.activeAccountId } ?: local.accounts.firstOrNull()
@@ -59,14 +72,44 @@ data class MarsUiState(
     val activeProfile: ViewerProfile?
         get() = local.profiles.firstOrNull { it.id == local.activeProfileId } ?: local.profiles.firstOrNull()
 
-    val favouriteKeys: Set<String>
+    private val storedFavouriteKeys: Set<String>
         get() = activeProfile?.let { local.favouriteKeysByProfile[it.id].orEmpty() }.orEmpty()
 
+    val favouriteKeys: Set<String>
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.FAVORITE_GROUPS in entitlementState.features
+        ) storedFavouriteKeys else storedFavouriteKeys.take(EntitlementPolicy.FREE_FAVOURITE_LIMIT).toSet()
+
+    val lockedFavouriteKeys: Set<String>
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.FAVORITE_GROUPS in entitlementState.features
+        ) emptySet() else storedFavouriteKeys.drop(EntitlementPolicy.FREE_FAVOURITE_LIMIT).toSet()
+
+    val parentalControlsEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro &&
+            ProFeature.PARENTAL_CONTROLS in entitlementState.features
+
+    val fullEpgEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro && ProFeature.FULL_EPG in entitlementState.features
+
+    val globalSearchEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro && ProFeature.GLOBAL_SEARCH in entitlementState.features
+
+    val isPro: Boolean
+        get() = entitlementState is EntitlementState.Pro
+
     val watchHistory: List<WatchRecord>
-        get() = activeProfile?.let { local.watchHistoryByProfile[it.id].orEmpty() }.orEmpty()
+        get() {
+            val stored = activeProfile?.let { local.watchHistoryByProfile[it.id].orEmpty() }.orEmpty()
+            return if (entitlementState is EntitlementState.Pro &&
+                ProFeature.CONTINUE_WATCHING in entitlementState.features
+            ) stored else stored.sortedByDescending(WatchRecord::watchedAt).take(EntitlementPolicy.FREE_HISTORY_LIMIT)
+        }
 
     val continueWatching: List<WatchRecord>
-        get() = watchHistory.filter(WatchRecord::canContinue)
+        get() = if (entitlementState is EntitlementState.Pro &&
+            ProFeature.CONTINUE_WATCHING in entitlementState.features
+        ) watchHistory.filter(WatchRecord::canContinue) else emptyList()
 }
 
 class MarsTvViewModel(application: Application) : AndroidViewModel(application) {
@@ -74,7 +117,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     private val catalogPersistence = tv.mars.app.data.local.CatalogPersistence(application)
     private val roomCatalog = RoomCatalogStore(MarsTvDatabase.getInstance(application))
     private val repository = IptvRepository(catalogPersistence, roomCatalog)
+    private val entitlementManager: EntitlementManager = createEntitlementManager(application)
+    private val entitlementPolicy = EntitlementPolicy(entitlementManager)
     private var catalogJob: Job? = null
+    private var activationPollingJob: Job? = null
     private var catalogJobAccountId: String? = null
     private var catalogStartedAtElapsedMs = 0L
     private val _uiState = MutableStateFlow(MarsUiState())
@@ -84,6 +130,26 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
+            entitlementManager.restore()
+            entitlementManager.refresh(tv.mars.app.entitlement.RefreshReason.APP_START)
+        }
+        viewModelScope.launch {
+            entitlementManager.state.collectLatest { entitlement ->
+                _uiState.update {
+                    it.copy(
+                        entitlementState = entitlement,
+                        overlay = if (entitlement is EntitlementState.Pro && it.overlay == OverlayScreen.UPGRADE) OverlayScreen.NONE else it.overlay,
+                    )
+                }
+            }
+        }
+        viewModelScope.launch {
+            entitlementManager.activationState.collectLatest { activation ->
+                _uiState.update { it.copy(activationState = activation) }
+            }
+        }
+        viewModelScope.launch {
+            stateStore.migrateForFreeGates()
             stateStore.state.collectLatest { local ->
                 val previousAccount = _uiState.value.activeAccount?.id
                 _uiState.update {
@@ -116,6 +182,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         m3uUrl: String,
     ) {
         if (_uiState.value.isConnecting) return
+        if (!entitlementPolicy.canAddAccount(_uiState.value.local.accounts.size)) {
+            showLockedFeature("Multiple TV sources")
+            return
+        }
         catalogJob?.cancel()
         catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
         Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
@@ -214,14 +284,13 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         catalogJobAccountId = account.id
         Log.i(BENCHMARK_TAG, "catalog_start mode=${if (force) "refresh" else "load"} source=${account.sourceType}")
         catalogJob = viewModelScope.launch {
-            _uiState.update {
-                it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null, selectedSeries = null)
-            }
-            
+            _uiState.update { it.copy(errorMessage = null, selectedSeries = null) }
+
             if (!force) {
                 val dayMs = 24 * 60 * 60 * 1000L
                 val roomLoadedAt = repository.catalogLoadedAt(account.id)
                 if (roomLoadedAt != null && System.currentTimeMillis() - roomLoadedAt < dayMs) {
+                    Log.i(BENCHMARK_TAG, "catalog_cache_hit source=room")
                     _uiState.update {
                         it.copy(
                             loadedCatalogAccountId = account.id,
@@ -257,6 +326,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
 
+            Log.i(BENCHMARK_TAG, "catalog_cache_miss refresh=true")
             _uiState.update { it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null) }
 
             runCatching { repository.refreshCatalog(account) }
@@ -290,6 +360,12 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectAccount(accountId: String) {
+        if (accountId != _uiState.value.local.activeAccountId &&
+            !entitlementManager.hasFeature(ProFeature.MULTIPLE_ACCOUNTS)
+        ) {
+            showLockedFeature("Switching TV sources")
+            return
+        }
         viewModelScope.launch { stateStore.setActiveAccount(accountId) }
     }
 
@@ -337,13 +413,28 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         channelEpgId: String,
         windowStart: Long,
         windowEnd: Long,
-    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd)
+    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd).map { programmes ->
+        if (entitlementPolicy.canUseFullEpg()) programmes else currentAndNextProgrammes(programmes)
+    }
 
     suspend fun searchCatalog(
         accountId: String,
         query: String,
         blockedCategoryKeys: Set<String>,
-    ): CatalogLookup = repository.searchCatalog(accountId, query, blockedCategoryKeys)
+    ): CatalogLookup {
+        if (!entitlementPolicy.canSearchGlobally()) {
+            return repository.searchCatalog(accountId, query, blockedCategoryKeys)
+        }
+        return coroutineScope {
+            val lookups = _uiState.value.local.accounts.map { account ->
+                async { repository.searchCatalog(account.id, query, blockedCategoryKeys) }
+            }.map { it.await() }
+            CatalogLookup(
+                channels = lookups.flatMap(CatalogLookup::channels).distinctBy(Channel::key),
+                media = lookups.flatMap(CatalogLookup::media).distinctBy(MediaContent::key),
+            )
+        }
+    }
 
     suspend fun favouriteCatalog(
         accountId: String,
@@ -355,17 +446,39 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }
     }
 
-    fun showAddAccount() = _uiState.update { it.copy(overlay = OverlayScreen.ADD_ACCOUNT, errorMessage = null) }
+    fun showAddAccount() {
+        if (!entitlementPolicy.canAddAccount(_uiState.value.local.accounts.size)) {
+            showLockedFeature("Multiple TV sources")
+            return
+        }
+        _uiState.update { it.copy(overlay = OverlayScreen.ADD_ACCOUNT, errorMessage = null) }
+    }
     fun showProfiles() = _uiState.update { it.copy(overlay = OverlayScreen.PROFILES, errorMessage = null) }
+    fun showUpgrade() = _uiState.update { it.copy(overlay = OverlayScreen.UPGRADE, lockedFeatureName = null) }
+    fun beginActivation() {
+        activationPollingJob?.cancel()
+        activationPollingJob = viewModelScope.launch {
+            val activation = entitlementManager.beginActivation()
+            if (activation !is ActivationState.Ready) return@launch
+            while (java.time.Instant.now().isBefore(activation.expiresAt)) {
+                delay(ACTIVATION_POLL_INTERVAL_MS)
+                if (_uiState.value.overlay != OverlayScreen.UPGRADE) return@launch
+                entitlementManager.refresh(tv.mars.app.entitlement.RefreshReason.USER_REQUEST)
+                if (entitlementManager.state.value is EntitlementState.Pro) return@launch
+            }
+        }
+    }
     fun clearError() = _uiState.update { it.copy(errorMessage = null) }
     fun setSearchQuery(value: String) = _uiState.update { it.copy(searchQuery = value) }
 
     fun dismissOverlay() {
+        if (_uiState.value.overlay == OverlayScreen.UPGRADE) activationPollingJob?.cancel()
         _uiState.update {
             it.copy(
                 overlay = OverlayScreen.NONE,
                 selectedSeries = null,
                 playerRequest = null,
+                lockedFeatureName = null,
             )
         }
     }
@@ -377,6 +490,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun playProgramme(channel: Channel, programme: Programme) {
         val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
+        if (programme.isPast && !entitlementManager.hasFeature(ProFeature.CATCH_UP)) {
+            showLockedFeature("Catch-up playback")
+            return
+        }
         val request = when {
             programme.isLive -> repository.liveRequest(account, channel)
             programme.isPast -> repository.catchUpRequest(account, channel, programme)
@@ -398,7 +515,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         url = repository.playbackUrl(account, media.playbackUrl),
                         kind = media.kind,
                         artworkUrl = media.artworkUrl,
-                        resumePositionMs = resume,
+                        resumePositionMs = entitlementPolicy.resumePosition(resume),
+                        playbackLimitMs = entitlementPolicy.playbackLimitMs(media.kind),
                     ),
                 )
             }
@@ -434,7 +552,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 url = repository.playbackUrl(account, episode.playbackUrl),
                 kind = ContentKind.EPISODE,
                 artworkUrl = episode.artworkUrl,
-                resumePositionMs = resume,
+                resumePositionMs = entitlementPolicy.resumePosition(resume),
+                playbackLimitMs = entitlementPolicy.playbackLimitMs(ContentKind.EPISODE),
             ),
         )
     }
@@ -447,7 +566,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             url = record.playbackUrl,
             kind = record.kind,
             artworkUrl = record.artworkUrl,
-            resumePositionMs = record.positionMs,
+            resumePositionMs = entitlementPolicy.resumePosition(record.positionMs),
+            playbackLimitMs = entitlementPolicy.playbackLimitMs(record.kind),
         ),
     )
 
@@ -481,23 +601,44 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleFavourite(contentKey: String) {
         val profileId = _uiState.value.activeProfile?.id ?: return
+        val favourites = _uiState.value.local.favouriteKeysByProfile[profileId].orEmpty()
+        if (contentKey !in favourites && !entitlementPolicy.canAddFavourite(favourites.size)) {
+            showLockedFeature("More than ${EntitlementPolicy.FREE_FAVOURITE_LIMIT} favourites")
+            return
+        }
         viewModelScope.launch { stateStore.toggleFavourite(profileId, contentKey) }
     }
 
     fun addProfile(name: String) {
+        if (!entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Multiple profiles")
+            return
+        }
         viewModelScope.launch { stateStore.addProfile(name) }
     }
 
     fun selectProfile(profileId: String) {
+        if (profileId != _uiState.value.local.activeProfileId && !entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Switching profiles")
+            return
+        }
         _uiState.update { it.copy(unlockedCategoryKeys = emptySet(), overlay = OverlayScreen.NONE) }
         viewModelScope.launch { stateStore.setActiveProfile(profileId) }
     }
 
     fun removeProfile(profileId: String) {
+        if (!entitlementPolicy.canUseMultipleProfiles()) {
+            showLockedFeature("Editing profiles")
+            return
+        }
         viewModelScope.launch { stateStore.removeProfile(profileId) }
     }
 
     fun setProfilePin(pin: String) {
+        if (!entitlementPolicy.canUseParentalControls()) {
+            showLockedFeature("Parental controls")
+            return
+        }
         val profile = _uiState.value.activeProfile ?: return
         val updated = profile.copy(pinHash = if (pin.isBlank()) "" else SecureStateStore.hashPin(pin))
         _uiState.update { it.copy(unlockedCategoryKeys = emptySet()) }
@@ -505,6 +646,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun toggleCategoryRestriction(categoryKey: String) {
+        if (!entitlementPolicy.canUseParentalControls()) {
+            showLockedFeature("Parental controls")
+            return
+        }
         val profile = _uiState.value.activeProfile ?: return
         val current = profile.restrictedCategoryKeys
         _uiState.update { it.copy(unlockedCategoryKeys = it.unlockedCategoryKeys - categoryKey) }
@@ -525,7 +670,8 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     fun isCategoryLocked(categoryKey: String): Boolean {
         val state = _uiState.value
-        return categoryKey in state.activeProfile?.restrictedCategoryKeys.orEmpty() &&
+        return state.parentalControlsEnabled &&
+            categoryKey in state.activeProfile?.restrictedCategoryKeys.orEmpty() &&
             categoryKey !in state.unlockedCategoryKeys
     }
 
@@ -536,6 +682,12 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun openPlayer(request: PlayerRequest) {
         _uiState.update { it.copy(playerRequest = request, overlay = OverlayScreen.PLAYER) }
+    }
+
+    private fun showLockedFeature(name: String) {
+        _uiState.update {
+            it.copy(overlay = OverlayScreen.UPGRADE, lockedFeatureName = name, errorMessage = null)
+        }
     }
 
     private fun normalizeUrl(raw: String): String {
@@ -550,5 +702,13 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
     private companion object {
         const val BENCHMARK_TAG = "MarsCatalogMetrics"
+        const val ACTIVATION_POLL_INTERVAL_MS = 5_000L
     }
+}
+
+internal fun currentAndNextProgrammes(programmes: List<Programme>, nowMs: Long = System.currentTimeMillis()): List<Programme> {
+    val ordered = programmes.sortedBy(Programme::startMs)
+    val current = ordered.firstOrNull { it.startMs <= nowMs && it.endMs > nowMs }
+    val next = ordered.firstOrNull { it.startMs >= (current?.endMs ?: nowMs) }
+    return listOfNotNull(current, next)
 }

@@ -39,6 +39,14 @@ class SecureStateStore(private val context: Context) {
         decode(preferences[blobKey]).withDefaultProfile()
     }
 
+    suspend fun migrateForFreeGates() {
+        context.marsDataStore.edit { preferences ->
+            val current = decode(preferences[blobKey])
+            if (current.entitlementMigrationVersion >= ENTITLEMENT_MIGRATION_VERSION) return@edit
+            preferences[blobKey] = cipher.encrypt(json.encodeToString(current.migrateForFreeGates()))
+        }
+    }
+
     suspend fun addAccount(account: IptvAccount) = mutate { current ->
         current.copy(
             accounts = current.accounts.filterNot { it.id == account.id } + account,
@@ -120,10 +128,31 @@ class SecureStateStore(private val context: Context) {
     }
 
     companion object {
+        const val ENTITLEMENT_MIGRATION_VERSION = 1
+
         fun hashPin(pin: String): String = MessageDigest.getInstance("SHA-256")
             .digest(pin.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
     }
+}
+
+internal fun LocalState.migrateForFreeGates(): LocalState {
+    if (entitlementMigrationVersion >= SecureStateStore.ENTITLEMENT_MIGRATION_VERSION) return this
+    val selectedAccountId = activeAccountId?.takeIf { active -> accounts.any { it.id == active } }
+        ?: accounts.firstOrNull()?.id
+    val migratedProfiles = if (profiles.isEmpty()) {
+        listOf(ViewerProfile(id = UUID.randomUUID().toString(), name = "Main"))
+    } else {
+        profiles
+    }
+    val selectedProfileId = activeProfileId?.takeIf { active -> migratedProfiles.any { it.id == active } }
+        ?: migratedProfiles.first().id
+    return copy(
+        activeAccountId = selectedAccountId,
+        profiles = migratedProfiles,
+        activeProfileId = selectedProfileId,
+        entitlementMigrationVersion = SecureStateStore.ENTITLEMENT_MIGRATION_VERSION,
+    )
 }
 
 private class CredentialCipher {

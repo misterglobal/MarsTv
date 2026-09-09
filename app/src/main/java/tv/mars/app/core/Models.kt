@@ -68,6 +68,7 @@ data class LocalState(
     val activeProfileId: String? = null,
     val favouriteKeysByProfile: Map<String, Set<String>> = emptyMap(),
     val watchHistoryByProfile: Map<String, List<WatchRecord>> = emptyMap(),
+    val entitlementMigrationVersion: Int = 0,
 )
 
 @Serializable
@@ -174,6 +175,7 @@ data class PlayerRequest(
     val kind: ContentKind,
     val artworkUrl: String = "",
     val resumePositionMs: Long = 0,
+    val playbackLimitMs: Long = 0,
 )
 
 enum class MainDestination(val label: String) {
@@ -185,4 +187,4 @@ enum class MainDestination(val label: String) {
     SETTINGS("Settings"),
 }
 
-enum class OverlayScreen { NONE, ADD_ACCOUNT, PROFILES, SERIES_DETAILS, PLAYER }
+enum class OverlayScreen { NONE, ADD_ACCOUNT, PROFILES, SERIES_DETAILS, PLAYER, UPGRADE }

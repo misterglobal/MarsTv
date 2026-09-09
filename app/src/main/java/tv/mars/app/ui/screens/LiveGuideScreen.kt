@@ -82,6 +82,7 @@ fun LiveGuideScreen(
     programmesSource: (channelEpgId: String, windowStart: Long, windowEnd: Long) -> Flow<List<Programme>>,
     blockedCategoryKeys: Set<String>,
     favouriteKeys: Set<String>,
+    fullEpgEnabled: Boolean,
     profileHasPin: Boolean,
     isCategoryLocked: (String) -> Boolean,
     pinMatches: (String) -> Boolean,
@@ -110,6 +111,7 @@ fun LiveGuideScreen(
             categories = categories,
             selectedCategory = selectedCategory,
             isLocked = isCategoryLocked,
+            fullEpgEnabled = fullEpgEnabled,
             onSelect = { category ->
                 if (category != null && isCategoryLocked(category.key)) pendingUnlock = category
                 else selectedCategory = category?.key
@@ -184,6 +186,7 @@ private fun GuideHeader(
     categories: List<Category>,
     selectedCategory: String?,
     isLocked: (String) -> Boolean,
+    fullEpgEnabled: Boolean,
     onSelect: (Category?) -> Unit,
     onEarlier: () -> Unit,
     onNow: () -> Unit,
@@ -200,9 +203,9 @@ private fun GuideHeader(
                 Text("Select a programme to watch live or replay catch-up", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(onClick = onEarlier, label = { Text("−2h") })
+                if (fullEpgEnabled) AssistChip(onClick = onEarlier, label = { Text("−2h") })
                 AssistChip(onClick = onNow, label = { Text("Now") })
-                AssistChip(onClick = onLater, label = { Text("+2h") })
+                if (fullEpgEnabled) AssistChip(onClick = onLater, label = { Text("+2h") })
             }
         }
         Spacer(Modifier.height(10.dp))

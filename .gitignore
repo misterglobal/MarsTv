@@ -39,3 +39,4 @@ gradle-app-home/
 # Local performance fixtures and captured device data
 tools/benchmark/benchmark-data/
 tools/benchmark/results/
+.local-tools/

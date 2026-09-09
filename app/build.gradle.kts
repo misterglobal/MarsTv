@@ -26,6 +26,10 @@ val privatePortalUrl = providers.gradleProperty("MARSTV_PRIVATE_PORTAL_URL")
 val escapedPrivatePortalUrl = privatePortalUrl
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
+val marsBackendUrl = providerProperties.getProperty("MARSTV_BACKEND_URL", "https://marstv.online/api/v1/")
+require(marsBackendUrl.startsWith("https://")) { "MARSTV_BACKEND_URL must use HTTPS" }
+val entitlementPublicKeyPem = providerProperties.getProperty("MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM", "")
+fun String.asBuildConfigString() = replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
 
 val releaseSigningFile = rootProject.file("keystore.properties")
 val releaseSigningProperties = Properties().apply {
@@ -53,6 +57,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "PRIVATE_PORTAL_URL", "\"$escapedPrivatePortalUrl\"")
+        buildConfigField("String", "MARS_BACKEND_URL", "\"${marsBackendUrl.asBuildConfigString()}\"")
+        buildConfigField("String", "ENTITLEMENT_PUBLIC_KEY_PEM", "\"${entitlementPublicKeyPem.asBuildConfigString()}\"")
     }
 
     signingConfigs {
@@ -124,6 +130,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.zxing.core)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.room.paging)

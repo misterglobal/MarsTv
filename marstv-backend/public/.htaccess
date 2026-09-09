@@ -1,0 +1,20 @@
+Options -Indexes
+RewriteEngine On
+
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1)(:\d+)?$ [NC]
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L,NE]
+
+RewriteRule ^api/v1/(devices/register|devices/[0-9a-f-]{36}/(challenges|status)|activation-sessions|activation-sessions/(preview|redeem|resume)|checkout/(create|freemius/claim))$ api.php [QSA,L]
+RewriteRule ^api/v1/webhooks/payment$ webhook.php [L]
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" env=HTTPS
+Header always unset X-Powered-By

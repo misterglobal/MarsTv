@@ -58,7 +58,11 @@ import tv.mars.app.ui.theme.MarsViolet
 import tv.mars.app.ui.theme.MarsWhite
 
 @Composable
-fun MarsLogo(modifier: Modifier = Modifier, compact: Boolean = false) {
+fun MarsLogo(
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    isPro: Boolean = false,
+) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Canvas(modifier = Modifier.size(if (compact) 34.dp else 46.dp)) {
             val radius = size.minDimension * 0.30f
@@ -110,6 +114,24 @@ fun MarsLogo(modifier: Modifier = Modifier, compact: Boolean = false) {
             fontWeight = FontWeight.Black,
             color = MarsRed,
         )
+        if (isPro) {
+            Spacer(Modifier.width(if (compact) 6.dp else 8.dp))
+            Surface(
+                color = MarsRed,
+                shape = RoundedCornerShape(50),
+            ) {
+                Text(
+                    text = "PRO",
+                    modifier = Modifier.padding(
+                        horizontal = if (compact) 6.dp else 8.dp,
+                        vertical = if (compact) 2.dp else 3.dp,
+                    ),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Black,
+                )
+            }
+        }
     }
 }
 

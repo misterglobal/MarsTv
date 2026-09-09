@@ -60,6 +60,7 @@ import tv.mars.app.ui.screens.ProfilesScreen
 import tv.mars.app.ui.screens.SearchScreen
 import tv.mars.app.ui.screens.SeriesDetailsScreen
 import tv.mars.app.ui.screens.SettingsScreen
+import tv.mars.app.ui.screens.UpgradeScreen
 import tv.mars.app.ui.theme.MarsMidnight
 import tv.mars.app.ui.theme.MarsMuted
 import tv.mars.app.ui.theme.MarsRed
@@ -95,6 +96,14 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
                     onSelect = viewModel::selectProfile,
                     onAdd = viewModel::addProfile,
                     onRemove = viewModel::removeProfile,
+                    onBack = viewModel::dismissOverlay,
+                )
+            }
+            state.overlay == OverlayScreen.UPGRADE -> {
+                UpgradeScreen(
+                    lockedFeatureName = state.lockedFeatureName,
+                    activationState = state.activationState,
+                    onActivate = viewModel::beginActivation,
                     onBack = viewModel::dismissOverlay,
                 )
             }
@@ -138,6 +147,7 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
             HomeTopBar(
                 accountName = state.activeAccount?.name.orEmpty(),
                 profileName = state.activeProfile?.name.orEmpty(),
+                isPro = state.isPro,
                 onProfiles = viewModel::showProfiles,
             )
             ErrorBanner(
@@ -175,13 +185,13 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
 }
 
 @Composable
-private fun HomeTopBar(accountName: String, profileName: String, onProfiles: () -> Unit) {
+private fun HomeTopBar(accountName: String, profileName: String, isPro: Boolean, onProfiles: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().height(70.dp).background(MarsMidnight).padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        MarsLogo(compact = true)
+        MarsLogo(compact = true, isPro = isPro)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(accountName, color = MarsMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             Spacer(Modifier.width(14.dp))
@@ -208,10 +218,14 @@ private fun DestinationContent(
     isTelevision: Boolean,
     modifier: Modifier,
 ) {
-    val hasPin = !state.activeProfile?.pinHash.isNullOrBlank()
+    val hasPin = state.parentalControlsEnabled && !state.activeProfile?.pinHash.isNullOrBlank()
     val openSettings = { viewModel.setDestination(MainDestination.SETTINGS) }
     val accountId = state.activeAccount?.id.orEmpty()
-    val blockedCategoryKeys = state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
+    val blockedCategoryKeys = if (state.parentalControlsEnabled) {
+        state.activeProfile?.restrictedCategoryKeys.orEmpty() - state.unlockedCategoryKeys
+    } else {
+        emptySet()
+    }
     when (state.destination) {
         MainDestination.LIVE -> LiveGuideScreen(
             accountId = accountId,
@@ -220,6 +234,7 @@ private fun DestinationContent(
             programmesSource = { epgId, start, end -> viewModel.programmes(accountId, epgId, start, end) },
             blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
+            fullEpgEnabled = state.fullEpgEnabled,
             profileHasPin = hasPin,
             isCategoryLocked = viewModel::isCategoryLocked,
             pinMatches = viewModel::pinMatches,
@@ -278,6 +293,7 @@ private fun DestinationContent(
             blockedCategoryKeys = blockedCategoryKeys,
             searchSource = { query, blocked -> viewModel.searchCatalog(accountId, query, blocked) },
             favouriteKeys = state.favouriteKeys,
+            globalSearchEnabled = state.globalSearchEnabled,
             isTelevision = isTelevision,
             onPlayChannel = viewModel::playChannel,
             onOpenMedia = viewModel::openMedia,
@@ -288,6 +304,7 @@ private fun DestinationContent(
             accountId = accountId,
             catalogRevision = state.catalogRevision,
             favouriteKeys = state.favouriteKeys,
+            lockedFavouriteKeys = state.lockedFavouriteKeys,
             blockedCategoryKeys = blockedCategoryKeys,
             favouritesSource = { keys, blocked -> viewModel.favouriteCatalog(accountId, keys, blocked) },
             continueWatching = state.continueWatching,
@@ -313,6 +330,7 @@ private fun DestinationContent(
                 profiles = state.local.profiles,
                 activeProfile = state.activeProfile,
                 categories = liveCategories + movieCategories + seriesCategories,
+                isPro = state.isPro,
                 pinMatches = viewModel::pinMatches,
                 onSelectAccount = viewModel::selectAccount,
                 onRemoveAccount = viewModel::removeAccount,
@@ -321,6 +339,7 @@ private fun DestinationContent(
                 onOpenProfiles = viewModel::showProfiles,
                 onSetPin = viewModel::setProfilePin,
                 onToggleCategory = viewModel::toggleCategoryRestriction,
+                onUpgrade = viewModel::showUpgrade,
                 modifier = modifier,
             )
         }

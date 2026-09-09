@@ -1,0 +1,51 @@
+.legal-use-box {
+  margin: 0 0 22px;
+  padding: 19px;
+  background: #090e17;
+  border: 1px solid #ffffff12;
+  border-radius: 14px;
+}
+
+.legal-use-box > strong {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 0.82rem;
+}
+
+.legal-use-box > p {
+  margin-bottom: 14px;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
+.legal-check {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 0 !important;
+  color: #cbd5e1;
+  font-size: 0.78rem !important;
+  font-weight: 500 !important;
+  line-height: 1.5;
+}
+
+.legal-check input {
+  width: 19px !important;
+  height: 19px !important;
+  min-width: 19px;
+  margin: 2px 0 0;
+  accent-color: var(--coral);
+  box-shadow: none !important;
+}
+
+.legal-check a {
+  color: var(--coral);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.legal-use-box .field-error {
+  min-height: 0;
+  margin: 9px 0 0;
+  text-align: left;
+}

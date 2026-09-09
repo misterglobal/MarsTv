@@ -1,7 +1,9 @@
 package tv.mars.app.ui.screens
 
 import android.view.WindowManager
+import android.view.View
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +38,7 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 import tv.mars.app.MainActivity
 import tv.mars.app.core.PlayerRequest
 import tv.mars.app.data.network.NetworkClient
@@ -59,6 +62,8 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             .build()
     }
     var errorMessage by remember(request.url) { mutableStateOf<String?>(null) }
+    var playbackLimitReached by remember(request.url) { mutableStateOf(false) }
+    var controlsVisible by remember(request.url) { mutableStateOf(true) }
 
     fun close() {
         onClose(player.currentPosition.coerceAtLeast(0L), player.duration.coerceAtLeast(0L))
@@ -89,6 +94,20 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
         player.playWhenReady = true
     }
 
+    LaunchedEffect(player, request.url, request.playbackLimitMs) {
+        if (request.playbackLimitMs <= 0L) return@LaunchedEffect
+        while (true) {
+            delay(100)
+            if (player.currentPosition >= request.playbackLimitMs) {
+                player.pause()
+                player.seekTo(request.playbackLimitMs)
+                playbackLimitReached = true
+                errorMessage = "Free playback ends at 10:00. Upgrade to MarsTV Pro to watch the full title."
+                break
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { viewContext ->
@@ -97,6 +116,11 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
                     useController = true
                     controllerAutoShow = true
                     controllerShowTimeoutMs = 4_000
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            controlsVisible = visibility == View.VISIBLE
+                        },
+                    )
                     keepScreenOn = true
                 }
             },
@@ -104,13 +128,18 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             modifier = Modifier.fillMaxSize(),
         )
 
-        Text(
-            text = request.title,
-            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().background(MarsMidnight.copy(alpha = 0.64f)).padding(16.dp),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MarsWhite,
-        )
+        AnimatedVisibility(
+            visible = controlsVisible,
+            modifier = Modifier.align(Alignment.TopStart),
+        ) {
+            Text(
+                text = request.title,
+                modifier = Modifier.fillMaxWidth().background(MarsMidnight.copy(alpha = 0.64f)).padding(16.dp),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MarsWhite,
+            )
+        }
 
         errorMessage?.let { message ->
             Column(
@@ -119,7 +148,11 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             ) {
                 Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MarsRed)
                 Spacer(Modifier.height(10.dp))
-                Text("Playback problem", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(
+                    if (playbackLimitReached) "Free playback limit reached" else "Playback problem",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(message, color = MarsMuted)
                 Spacer(Modifier.height(16.dp))
