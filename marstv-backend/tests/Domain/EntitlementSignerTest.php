@@ -44,6 +44,27 @@ final class EntitlementSignerTest extends TestCase
         self::assertSame(1, openssl_verify($parts[0].'.'.$parts[1], $this->joseToDer($jose), $this->publicKey, OPENSSL_ALGO_SHA256));
     }
 
+    public function testSignsAndroidCompatibleRevocation(): void
+    {
+        $token = (new EntitlementSigner($this->privatePath, 'entitlement-2026-01'))->revocation(
+            ['license_uuid' => 'license-id', 'license_version' => 5],
+            ['device_uuid' => 'device-id'],
+            'refunded',
+            1_800_000_000,
+        );
+        $parts = explode('.', $token);
+        self::assertCount(3, $parts);
+        $header = json_decode($this->decode($parts[0]), true, flags: JSON_THROW_ON_ERROR);
+        $payload = json_decode($this->decode($parts[1]), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame('marstv-revocation+jwt', $header['typ']);
+        self::assertSame('device-id', $payload['sub']);
+        self::assertSame('license-id', $payload['license_id']);
+        self::assertSame(5, $payload['license_version']);
+        self::assertSame('revoked', $payload['status']);
+        self::assertSame('refunded', $payload['reason_code']);
+        self::assertSame(1, openssl_verify($parts[0].'.'.$parts[1], $this->joseToDer($this->decode($parts[2])), $this->publicKey, OPENSSL_ALGO_SHA256));
+    }
+
     private function decode(string $value): string
     {
         return (string) base64_decode(strtr($value, '-_', '+/').str_repeat('=', (4 - strlen($value) % 4) % 4), true);

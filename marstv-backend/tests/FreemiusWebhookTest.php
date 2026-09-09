@@ -22,4 +22,15 @@ final class FreemiusWebhookTest extends TestCase
         self::assertFalse(FreemiusWebhook::validSignature('{}', '', 'test-secret'));
         self::assertFalse(FreemiusWebhook::validSignature('{}', hash_hmac('sha256', '{}', 'test-secret'), ''));
     }
+
+    public function testPurchaseTransitionKeepsRefundsAndChargebacksTerminal(): void
+    {
+        self::assertSame('apply', FreemiusWebhook::purchaseTransition('paid', 'refunded'));
+        self::assertSame('apply', FreemiusWebhook::purchaseTransition('paid', 'chargeback'));
+        self::assertSame('terminal_duplicate', FreemiusWebhook::purchaseTransition('refunded', 'refunded'));
+        self::assertSame('reconciliation_required', FreemiusWebhook::purchaseTransition('refunded', 'paid'));
+        self::assertSame('reconciliation_required', FreemiusWebhook::purchaseTransition('chargeback', 'paid'));
+        self::assertSame('reconciliation_required', FreemiusWebhook::purchaseTransition('cancelled', 'paid'));
+        self::assertSame('stale', FreemiusWebhook::purchaseTransition('paid', 'cancelled'));
+    }
 }

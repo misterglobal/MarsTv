@@ -31,6 +31,22 @@ final class EntitlementSigner
         ]);
     }
 
+    public function revocation(array $license, array $device, string $reasonCode, ?int $now = null): string
+    {
+        if (!preg_match('/^[a-z0-9_]{2,50}$/D', $reasonCode)) throw new \InvalidArgumentException('Invalid revocation reason code');
+        return $this->sign('marstv-revocation+jwt', [
+            'iss' => 'https://marstv.online',
+            'aud' => 'tv.mars.app:direct',
+            'sub' => (string) $device['device_uuid'],
+            'license_id' => (string) $license['license_uuid'],
+            'license_version' => (int) $license['license_version'],
+            'status' => 'revoked',
+            'iat' => $now ?? time(),
+            'reason_code' => $reasonCode,
+            'token_version' => 1,
+        ]);
+    }
+
     private function sign(string $type, array $payload): string
     {
         if ($this->privateKeyPath === '' || !is_readable($this->privateKeyPath)) throw new \RuntimeException('Entitlement signing key is unavailable');
