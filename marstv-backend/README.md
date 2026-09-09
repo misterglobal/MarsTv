@@ -35,7 +35,7 @@ Transfers enforce the published rolling limits. The override flag is reserved fo
 
 Run `webhook:work` every minute from one cron entry. The worker uses a database advisory lock, processes only due `retry_wait` events in a bounded batch, applies increasing retry delays, and writes a redacted heartbeat to `storage/logs/webhook-worker-heartbeat.json`.
 
-Verified `payment.refund`, `payment.dispute.created`, and `payment.dispute.lost` events move the purchase to a terminal state, increment the licence version, close its current assignment, and issue a signed revocation on the device's next authenticated check. `payment.dispute.closed` and `payment.dispute.won` are recorded for reconciliation but never reactivate a terminal purchase automatically.
+Verified `payment.refund`, `payment.dispute.created`, and `payment.dispute.lost` events move the purchase to a terminal state, increment the licence version, close its current assignment, and issue a signed revocation on the device's next authenticated check. `payment.dispute.cancelled`, `payment.dispute.closed`, and `payment.dispute.won` are recorded for reconciliation but never reactivate a terminal purchase automatically.
 
 ## Current status
 

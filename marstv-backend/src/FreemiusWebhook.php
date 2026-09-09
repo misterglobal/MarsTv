@@ -10,7 +10,11 @@ final class FreemiusWebhook
         'payment.dispute.created' => 'chargeback',
         'payment.dispute.lost' => 'chargeback',
     ];
-    private const RECONCILIATION_EVENTS = ['payment.dispute.closed', 'payment.dispute.won'];
+    private const RECONCILIATION_EVENTS = [
+        'payment.dispute.cancelled',
+        'payment.dispute.closed',
+        'payment.dispute.won',
+    ];
 
     public function __construct(private readonly PDO $db) {}
 
