@@ -35,6 +35,8 @@ Transfers enforce the published rolling limits. The override flag is reserved fo
 
 Run `webhook:work` every minute from one cron entry. The worker uses a database advisory lock, processes only due `retry_wait` events in a bounded batch, applies increasing retry delays, and writes a redacted heartbeat to `storage/logs/webhook-worker-heartbeat.json`.
 
+Verified `payment.refund`, `payment.dispute.created`, and `payment.dispute.lost` events move the purchase to a terminal state, increment the licence version, close its current assignment, and issue a signed revocation on the device's next authenticated check. `payment.dispute.closed` and `payment.dispute.won` are recorded for reconciliation but never reactivate a terminal purchase automatically.
+
 ## Current status
 
 The repository contains the public site, browser activation and checkout flow, device registration, atomic challenge consumption, authenticated status polling, entitlement signing, support CLI, and idempotent Freemius payment-webhook fulfilment. A successful payment is matched to its pending checkout claim before the licence is activated; the Android client then verifies and stores the signed entitlement locally.
