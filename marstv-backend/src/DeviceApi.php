@@ -98,11 +98,30 @@ final class DeviceApi
         $query = $this->db->prepare("SELECT * FROM licenses WHERE current_device_id=:device AND status='active' LIMIT 1");
         $query->execute(['device' => $device['id']]);
         $license = $query->fetch();
-        if (!$license) return ['status' => 'free', 'server_time' => time()];
         $signer = new \MarsTv\Domain\EntitlementSigner(
             (string) config('entitlement_private_key_path'),
             (string) config('entitlement_key_id'),
         );
+        if (!$license) {
+            $revoked = $this->db->prepare(
+                "SELECT l.*,
+                        CASE WHEN l.status='revoked' THEN COALESCE(l.revocation_reason_code,'revoked') ELSE 'transferred' END reason_code
+                 FROM licenses l
+                 JOIN license_assignments a ON a.license_id=l.id
+                 WHERE a.device_id=:device
+                   AND (l.status='revoked' OR l.current_device_id<>:device2)
+                 ORDER BY l.license_version DESC,a.assigned_at DESC
+                 LIMIT 1"
+            );
+            $revoked->execute(['device' => $device['id'], 'device2' => $device['id']]);
+            $revocation = $revoked->fetch();
+            if (!$revocation) return ['status' => 'free', 'server_time' => time()];
+            return [
+                'status' => 'revoked',
+                'revocation' => $signer->revocation($revocation, $device, (string) $revocation['reason_code']),
+                'server_time' => time(),
+            ];
+        }
         $token = $signer->entitlement($license, $device);
         $verified = $this->db->prepare('UPDATE licenses SET last_verified_at=UTC_TIMESTAMP() WHERE id=:id');
         $verified->execute(['id' => $license['id']]);

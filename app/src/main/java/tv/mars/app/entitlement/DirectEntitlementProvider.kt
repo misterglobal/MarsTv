@@ -115,8 +115,11 @@ internal class DirectEntitlementProvider(
                 .getOrElse { return EntitlementResult.Failed(EntitlementIssue.INVALID_TOKEN) }
             val existing = store.load()
             if (existing != null && existing.licenseId == revocation.licenseId &&
-                revocation.licenseVersion <= maxOf(existing.licenseVersion, existing.revocationFloor)
+                revocation.licenseVersion < maxOf(existing.licenseVersion, existing.revocationFloor)
             ) return EntitlementResult.Failed(EntitlementIssue.INVALID_TOKEN)
+            if (existing != null && existing.licenseId == revocation.licenseId &&
+                revocation.licenseVersion == existing.revocationFloor
+            ) return update(EntitlementState.ActionRequired(EntitlementIssue.REVOKED))
             store.clearTokenKeepingFloor(revocation.licenseId, revocation.licenseVersion)
             update(EntitlementState.ActionRequired(EntitlementIssue.REVOKED))
         }

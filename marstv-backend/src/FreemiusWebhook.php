@@ -31,20 +31,49 @@ final class FreemiusWebhook
         $currency = strtoupper((string) ($payment['currency'] ?? ''));
         $amountMinor = $this->amountMinor($payment['gross'] ?? null);
         $environment = filter_var($payment['environment'] ?? null, FILTER_VALIDATE_INT);
-        $expectedEnvironment = config('freemius_mode') === 'sandbox' ? 1 : 0;
-        if ($productId !== (string) config('freemius_product_id')) throw new ApiProblem('WEBHOOK_PRODUCT_MISMATCH', 422);
-        if ($planId !== (string) config('freemius_plan_id')) throw new ApiProblem('WEBHOOK_PLAN_MISMATCH', 422);
-        if ($currency !== strtoupper((string) config('freemius_currency'))) throw new ApiProblem('WEBHOOK_CURRENCY_MISMATCH', 422);
-        $expectedAmountMinor = (int) config('freemius_amount_minor');
-        if ($amountMinor !== $expectedAmountMinor) {
-            throw new ApiProblem("WEBHOOK_AMOUNT_MISMATCH.RECEIVED_{$amountMinor}.EXPECTED_{$expectedAmountMinor}", 422);
-        }
-        if ($environment !== $expectedEnvironment) throw new ApiProblem('WEBHOOK_ENVIRONMENT_MISMATCH', 422);
+        if ($environment === false) throw new ApiProblem('INVALID_REQUEST', 400);
+        $this->validatePayment($productId, $planId, $currency, $amountMinor, $environment);
 
-        $reference = $this->storeEnvelope($id, $type, $event, $paymentId, $licenseId, $planId, $productId, $amountMinor, $currency);
-        $eventRow = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $rawBody), $reference);
+        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, $paymentId, $licenseId, $planId, $productId, $amountMinor, $currency, (int) $environment);
+        $eventRow = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $rawBody), $reference, $storedHash);
         if ($eventRow['processing_status'] === 'processed') return ['status' => 'duplicate'];
         return $this->fulfill((int) $eventRow['id'], $paymentId, $licenseId, $planId, $productId, $amountMinor, $currency);
+    }
+
+    public function replay(string $providerEventId): array
+    {
+        $providerEventId = $this->identifier($providerEventId);
+        $query = $this->db->prepare("SELECT * FROM webhook_events WHERE provider='freemius' AND provider_event_id=:event LIMIT 1");
+        $query->execute(['event' => $providerEventId]);
+        $row = $query->fetch() ?: throw new RuntimeException('Webhook event not found');
+        if ($row['processing_status'] === 'processed') return ['status' => 'duplicate'];
+        $expectedReference = 'storage/webhooks/'.hash('sha256', 'freemius|'.$providerEventId).'.json';
+        if (!hash_equals($expectedReference, (string) $row['payload_reference'])) throw new RuntimeException('Webhook replay reference is invalid');
+        $path = dirname(__DIR__).'/'.$expectedReference;
+        $stored = is_readable($path) ? file_get_contents($path) : false;
+        if ($stored === false || !hash_equals((string) ($row['stored_payload_sha256'] ?? ''), hash('sha256', $stored))) {
+            throw new RuntimeException('Webhook replay payload is unavailable or corrupt');
+        }
+        $payload = json_decode($stored, true, 16, JSON_THROW_ON_ERROR);
+        if (!is_array($payload) || ($payload['id'] ?? null) !== $providerEventId || ($payload['type'] ?? null) !== 'payment.created') {
+            throw new RuntimeException('Webhook replay payload is invalid');
+        }
+        $this->validatePayment(
+            (string) $payload['product_id'],
+            (string) $payload['plan_id'],
+            (string) $payload['currency'],
+            (int) $payload['amount_minor'],
+            (int) $payload['environment'],
+        );
+        return $this->fulfill(
+            (int) $row['id'],
+            (string) $payload['payment_id'],
+            (string) $payload['license_id'],
+            (string) $payload['plan_id'],
+            (string) $payload['product_id'],
+            (int) $payload['amount_minor'],
+            (string) $payload['currency'],
+        );
     }
 
     public static function validSignature(string $body, string $signature, string $secret): bool
@@ -90,11 +119,11 @@ final class FreemiusWebhook
         }
     }
 
-    private function ingest(string $id, string $type, string $created, string $hash, string $reference): array
+    private function ingest(string $id, string $type, string $created, string $hash, string $reference, string $storedHash): array
     {
         $at = strtotime($created.' UTC');
-        $statement = $this->db->prepare("INSERT INTO webhook_events (provider,provider_event_id,provider_event_type,provider_event_at,payload_sha256,payload_reference) VALUES ('freemius',:event,:type,:event_at,:hash,:reference) ON DUPLICATE KEY UPDATE provider_event_id=VALUES(provider_event_id)");
-        $statement->execute(['event' => $id, 'type' => $type, 'event_at' => $at === false ? null : gmdate('Y-m-d H:i:s', $at), 'hash' => $hash, 'reference' => $reference]);
+        $statement = $this->db->prepare("INSERT INTO webhook_events (provider,provider_event_id,provider_event_type,provider_event_at,payload_sha256,payload_reference,stored_payload_sha256) VALUES ('freemius',:event,:type,:event_at,:hash,:reference,:stored_hash) ON DUPLICATE KEY UPDATE provider_event_id=VALUES(provider_event_id)");
+        $statement->execute(['event' => $id, 'type' => $type, 'event_at' => $at === false ? null : gmdate('Y-m-d H:i:s', $at), 'hash' => $hash, 'reference' => $reference, 'stored_hash' => $storedHash]);
         $query = $this->db->prepare("SELECT id,processing_status FROM webhook_events WHERE provider='freemius' AND provider_event_id=:event LIMIT 1");
         $query->execute(['event' => $id]);
         return $query->fetch();
@@ -102,20 +131,31 @@ final class FreemiusWebhook
 
     private function recordIgnored(string $id, string $type, array $event, string $raw): array
     {
-        $reference = $this->storeEnvelope($id, $type, $event, '', '', '', '', 0, '');
-        $row = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $raw), $reference);
+        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, '', '', '', '', 0, '', -1);
+        $row = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $raw), $reference, $storedHash);
         $this->db->prepare("UPDATE webhook_events SET processing_status='processed',processing_result='ignored_event',processed_at=UTC_TIMESTAMP() WHERE id=:id AND processing_status<>'processed'")->execute(['id' => $row['id']]);
         return ['status' => 'ignored'];
     }
 
-    private function storeEnvelope(string $id, string $type, array $event, string $payment, string $license, string $plan, string $product, int $amount, string $currency): string
+    private function storeEnvelope(string $id, string $type, array $event, string $payment, string $license, string $plan, string $product, int $amount, string $currency, int $environment): array
     {
         $directory = dirname(__DIR__).'/storage/webhooks';
         if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Webhook storage unavailable');
         $name = hash('sha256', 'freemius|'.$id).'.json';
-        $payload = json_encode(['id' => $id, 'type' => $type, 'created' => $event['created'] ?? null, 'payment_id' => $payment, 'license_id' => $license, 'plan_id' => $plan, 'product_id' => $product, 'amount_minor' => $amount, 'currency' => $currency], JSON_THROW_ON_ERROR);
+        $payload = json_encode(['id' => $id, 'type' => $type, 'created' => $event['created'] ?? null, 'payment_id' => $payment, 'license_id' => $license, 'plan_id' => $plan, 'product_id' => $product, 'amount_minor' => $amount, 'currency' => $currency, 'environment' => $environment], JSON_THROW_ON_ERROR);
         if (file_put_contents($directory.'/'.$name, $payload, LOCK_EX) === false) throw new RuntimeException('Webhook storage unavailable');
-        return 'storage/webhooks/'.$name;
+        return ['storage/webhooks/'.$name, hash('sha256', $payload)];
+    }
+
+    private function validatePayment(string $productId, string $planId, string $currency, int $amountMinor, int $environment): void
+    {
+        if ($productId !== (string) config('freemius_product_id')) throw new ApiProblem('WEBHOOK_PRODUCT_MISMATCH', 422);
+        if ($planId !== (string) config('freemius_plan_id')) throw new ApiProblem('WEBHOOK_PLAN_MISMATCH', 422);
+        if (strtoupper($currency) !== strtoupper((string) config('freemius_currency'))) throw new ApiProblem('WEBHOOK_CURRENCY_MISMATCH', 422);
+        $expectedAmountMinor = (int) config('freemius_amount_minor');
+        if ($amountMinor !== $expectedAmountMinor) throw new ApiProblem("WEBHOOK_AMOUNT_MISMATCH.RECEIVED_{$amountMinor}.EXPECTED_{$expectedAmountMinor}", 422);
+        $expectedEnvironment = config('freemius_mode') === 'sandbox' ? 1 : 0;
+        if ($environment !== $expectedEnvironment) throw new ApiProblem('WEBHOOK_ENVIRONMENT_MISMATCH', 422);
     }
 
     private function identifier(mixed $value): string

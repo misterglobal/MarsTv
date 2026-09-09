@@ -3,18 +3,50 @@
 declare(strict_types=1);
 
 require dirname(__DIR__).'/src/bootstrap.php';
+require dirname(__DIR__).'/src/ActivationApi.php';
+require dirname(__DIR__).'/src/FreemiusWebhook.php';
 require dirname(__DIR__).'/src/SupportService.php';
 
 if (PHP_SAPI !== 'cli') exit(1);
 $command = $argv[1] ?? '';
 $options = [];
 foreach (array_slice($argv, 2) as $argument) {
-    if (preg_match('/^--(device|operator|reason)=(.*)$/sD', $argument, $match)) $options[$match[1]] = $match[2];
+    if ($argument === '--override-transfer-limit') { $options['override-transfer-limit'] = true; continue; }
+    if (preg_match('/^--(device|operator|reason|order|license|new-device|event)=(.*)$/sD', $argument, $match)) $options[$match[1]] = $match[2];
 }
 try {
-    if ($command !== 'test-license:grant') throw new InvalidArgumentException('Usage: php bin/marstv-support test-license:grant --device=MARS-XXXX --operator=NAME --reason="closed beta test"');
-    $result = (new SupportService(database()))->grantTestLicense((string) ($options['device'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
-    fwrite(STDOUT, ($result['created'] ? 'Created' : 'Existing')." test licence {$result['license']['license_uuid']} for {$result['device']['device_code']}\n");
+    $service = new SupportService(database());
+    if ($command === 'test-license:grant') {
+        $result = $service->grantTestLicense((string) ($options['device'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
+        fwrite(STDOUT, ($result['created'] ? 'Created' : 'Existing')." test licence {$result['license']['license_uuid']} for {$result['device']['device_code']}\n");
+    } elseif ($command === 'purchase:lookup') {
+        $result = $service->lookupPurchase((string) ($options['order'] ?? ''));
+        fwrite(STDOUT, json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+    } elseif ($command === 'license:transfer') {
+        $result = $service->transferLicense(
+            (string) ($options['license'] ?? ''),
+            (string) ($options['new-device'] ?? ''),
+            (string) ($options['operator'] ?? ''),
+            (string) ($options['reason'] ?? ''),
+            (bool) ($options['override-transfer-limit'] ?? false),
+        );
+        fwrite(STDOUT, ($result['changed'] ? 'Transferred' : 'Already assigned')." licence {$result['license']['license_uuid']} to {$result['device']['device_code']} at version {$result['license']['license_version']}\n");
+    } elseif ($command === 'license:revoke') {
+        $result = $service->revokeLicense((string) ($options['license'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
+        fwrite(STDOUT, ($result['changed'] ? 'Revoked' : 'Already revoked')." licence {$result['license']['license_uuid']} at version {$result['license']['license_version']}\n");
+    } elseif ($command === 'webhook:replay') {
+        $result = $service->replayWebhook((string) ($options['event'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
+        fwrite(STDOUT, "Webhook replay outcome: {$result['status']}\n");
+    } else {
+        throw new InvalidArgumentException(
+            "Commands:\n".
+            "  test-license:grant --device=MARS-XXXX --operator=NAME --reason=TEXT\n".
+            "  purchase:lookup --order=PROVIDER_ORDER_ID\n".
+            "  license:transfer --license=UUID --new-device=MARS-XXXX --operator=NAME --reason=TEXT [--override-transfer-limit]\n".
+            "  license:revoke --license=UUID --operator=NAME --reason=TEXT\n".
+            "  webhook:replay --event=PROVIDER_EVENT_ID --operator=NAME --reason=TEXT"
+        );
+    }
     exit(0);
 } catch (Throwable $error) {
     fwrite(STDERR, 'Failed: '.$error->getMessage()."\n");
