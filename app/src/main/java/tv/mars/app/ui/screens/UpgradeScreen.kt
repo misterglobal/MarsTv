@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
@@ -12,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.zxing.BarcodeFormat
@@ -20,6 +22,7 @@ import kotlinx.coroutines.delay
 import tv.mars.app.entitlement.ActivationState
 import tv.mars.app.ui.components.MarsButton
 import tv.mars.app.ui.theme.MarsMuted
+import tv.mars.app.ui.theme.MarsMidnight
 import tv.mars.app.ui.theme.MarsRed
 import java.time.Instant
 
@@ -29,8 +32,12 @@ fun UpgradeScreen(lockedFeatureName: String?, activationState: ActivationState, 
     Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Icon(if (lockedFeatureName == null) Icons.Default.Check else Icons.Default.Lock, null, tint = MarsRed)
         Spacer(Modifier.height(10.dp))
-        Text("MarsTV Pro", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black)
-        Text("CAD $14.99 · one-time lifetime licence · one device", color = MarsMuted)
+        Text(
+            if (activationState is ActivationState.Ready) "Activate MarsTV Pro" else "MarsTV Pro",
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Black,
+        )
+        Text("US $12.99 · one-time lifetime licence · one device", color = MarsMuted)
         if (lockedFeatureName != null) Text("$lockedFeatureName requires MarsTV Pro")
         Spacer(Modifier.height(16.dp))
         when (activationState) {
@@ -79,7 +86,20 @@ private fun ActivationDetails(state: ActivationState.Ready, onRenew: () -> Unit)
     Spacer(Modifier.height(10.dp))
     Text("Visit ${state.activationUrl}", fontWeight = FontWeight.Bold)
     Text("Device ID: ${state.deviceCode}")
-    Text("Activation code: ${state.activationCode}", style = MaterialTheme.typography.headlineSmall)
+    Surface(
+        modifier = Modifier.padding(vertical = 8.dp),
+        color = Color.White,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = 4.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("ACTIVATION CODE", color = MarsMidnight, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text(state.activationCode, color = MarsMidnight, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+        }
+    }
     Text("Expires in ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", color = MarsMuted)
     Text("Waiting for activation…", color = MarsMuted)
 }

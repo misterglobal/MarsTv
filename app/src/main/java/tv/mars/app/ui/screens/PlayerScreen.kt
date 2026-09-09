@@ -1,7 +1,9 @@
 package tv.mars.app.ui.screens
 
 import android.view.WindowManager
+import android.view.View
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +63,7 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
     }
     var errorMessage by remember(request.url) { mutableStateOf<String?>(null) }
     var playbackLimitReached by remember(request.url) { mutableStateOf(false) }
+    var controlsVisible by remember(request.url) { mutableStateOf(true) }
 
     fun close() {
         onClose(player.currentPosition.coerceAtLeast(0L), player.duration.coerceAtLeast(0L))
@@ -113,6 +116,11 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
                     useController = true
                     controllerAutoShow = true
                     controllerShowTimeoutMs = 4_000
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            controlsVisible = visibility == View.VISIBLE
+                        },
+                    )
                     keepScreenOn = true
                 }
             },
@@ -120,13 +128,18 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
             modifier = Modifier.fillMaxSize(),
         )
 
-        Text(
-            text = request.title,
-            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().background(MarsMidnight.copy(alpha = 0.64f)).padding(16.dp),
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = MarsWhite,
-        )
+        AnimatedVisibility(
+            visible = controlsVisible,
+            modifier = Modifier.align(Alignment.TopStart),
+        ) {
+            Text(
+                text = request.title,
+                modifier = Modifier.fillMaxWidth().background(MarsMidnight.copy(alpha = 0.64f)).padding(16.dp),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MarsWhite,
+            )
+        }
 
         errorMessage?.let { message ->
             Column(

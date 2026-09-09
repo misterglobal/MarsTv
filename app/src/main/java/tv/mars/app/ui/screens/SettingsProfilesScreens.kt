@@ -102,7 +102,7 @@ fun SettingsScreen(
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text("Upgrade to MarsTV Pro", fontWeight = FontWeight.Bold)
-                            Text("Lifetime access for one device · CAD $14.99", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("Lifetime access for one device · US $12.99", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
                         }
                         Text("View", color = MarsRed, fontWeight = FontWeight.Bold)
                     }
