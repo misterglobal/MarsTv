@@ -99,9 +99,8 @@ final class FreemiusWebhook
             foreach ($query->fetchAll(PDO::FETCH_COLUMN) as $providerEventId) {
                 $result['attempted']++;
                 try {
-                    $outcome = $this->replay((string) $providerEventId);
-                    if (in_array($outcome['status'] ?? '', ['processed', 'duplicate'], true)) $result['processed']++;
-                    else $result['failed']++;
+                    $this->replay((string) $providerEventId);
+                    $result['processed']++;
                 } catch (Throwable) {
                     $result['failed']++;
                     $this->scheduleReplayFailure((string) $providerEventId);
@@ -291,9 +290,16 @@ final class FreemiusWebhook
                 $purchase = ['id' => (int) $this->db->lastInsertId(), 'status' => $incomingState];
                 $this->db->prepare('UPDATE freemius_checkout_claims SET claim_status=:status WHERE id=:id')
                     ->execute(['status' => $incomingState, 'id' => $claim['id']]);
+                $this->db->prepare('UPDATE activation_sessions SET status=:status WHERE id=:id')
+                    ->execute(['status' => $incomingState, 'id' => $claim['activation_session_id']]);
             } else {
                 $currentState = (string) $purchase['status'];
                 $transition = self::purchaseTransition($currentState, $incomingState);
+                $effectiveState = $transition === 'apply' ? $incomingState : $currentState;
+                $this->db->prepare('UPDATE freemius_checkout_claims c JOIN purchases p ON p.activation_session_id=c.activation_session_id SET c.claim_status=:status WHERE p.id=:purchase')
+                    ->execute(['status' => $effectiveState, 'purchase' => $purchase['id']]);
+                $this->db->prepare('UPDATE activation_sessions s JOIN purchases p ON p.activation_session_id=s.id SET s.status=:status WHERE p.id=:purchase')
+                    ->execute(['status' => $effectiveState, 'purchase' => $purchase['id']]);
                 if ($transition !== 'apply') {
                     $result = $transition === 'reconciliation_required' ? 'terminal_reconciliation_required' : 'terminal_duplicate';
                     $this->db->prepare("UPDATE webhook_events SET purchase_id=:purchase,processing_status='processed',processing_result=:result,processing_attempts=processing_attempts+1,processed_at=UTC_TIMESTAMP(),next_attempt_at=NULL,last_error_code=:error WHERE id=:id")
@@ -303,8 +309,6 @@ final class FreemiusWebhook
                 }
                 $this->db->prepare('UPDATE purchases SET status=:status,refunded_at=UTC_TIMESTAMP() WHERE id=:id')
                     ->execute(['status' => $incomingState, 'id' => $purchase['id']]);
-                $this->db->prepare('UPDATE freemius_checkout_claims c JOIN purchases p ON p.activation_session_id=c.activation_session_id SET c.claim_status=:status WHERE p.id=:purchase')
-                    ->execute(['status' => $incomingState, 'purchase' => $purchase['id']]);
             }
 
             $licenseQuery = $this->db->prepare('SELECT * FROM licenses WHERE purchase_id=:purchase LIMIT 1 FOR UPDATE');
@@ -384,9 +388,14 @@ final class FreemiusWebhook
         $at = strtotime($created.' UTC');
         $statement = $this->db->prepare("INSERT INTO webhook_events (provider,provider_event_id,provider_event_type,provider_event_at,payload_sha256,payload_reference,stored_payload_sha256) VALUES ('freemius',:event,:type,:event_at,:hash,:reference,:stored_hash) ON DUPLICATE KEY UPDATE provider_event_id=VALUES(provider_event_id)");
         $statement->execute(['event' => $id, 'type' => $type, 'event_at' => $at === false ? null : gmdate('Y-m-d H:i:s', $at), 'hash' => $hash, 'reference' => $reference, 'stored_hash' => $storedHash]);
-        $query = $this->db->prepare("SELECT id,processing_status FROM webhook_events WHERE provider='freemius' AND provider_event_id=:event LIMIT 1");
+        $query = $this->db->prepare("SELECT id,processing_status,payload_sha256,stored_payload_sha256 FROM webhook_events WHERE provider='freemius' AND provider_event_id=:event LIMIT 1");
         $query->execute(['event' => $id]);
-        return $query->fetch();
+        $row = $query->fetch();
+        if (!hash_equals((string) $row['payload_sha256'], $hash) ||
+            !hash_equals((string) $row['stored_payload_sha256'], $storedHash)) {
+            throw new ApiProblem('WEBHOOK_EVENT_CONFLICT', 409);
+        }
+        return $row;
     }
 
     private function recordIgnored(string $id, string $type, array $event, string $raw): array
@@ -403,8 +412,24 @@ final class FreemiusWebhook
         if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Webhook storage unavailable');
         $name = hash('sha256', 'freemius|'.$id).'.json';
         $payload = json_encode(['id' => $id, 'type' => $type, 'created' => $event['created'] ?? null, 'payment_id' => $payment, 'license_id' => $license, 'plan_id' => $plan, 'product_id' => $product, 'amount_minor' => $amount, 'currency' => $currency, 'environment' => $environment], JSON_THROW_ON_ERROR);
-        if (file_put_contents($directory.'/'.$name, $payload, LOCK_EX) === false) throw new RuntimeException('Webhook storage unavailable');
-        return ['storage/webhooks/'.$name, hash('sha256', $payload)];
+        $path = $directory.'/'.$name;
+        $payloadHash = hash('sha256', $payload);
+        $handle = @fopen($path, 'x');
+        if ($handle !== false) {
+            try {
+                if (fwrite($handle, $payload) !== strlen($payload) || !fflush($handle)) {
+                    throw new RuntimeException('Webhook storage unavailable');
+                }
+            } finally {
+                fclose($handle);
+            }
+        } else {
+            $existing = is_readable($path) ? file_get_contents($path) : false;
+            if ($existing === false || !hash_equals(hash('sha256', $existing), $payloadHash)) {
+                throw new ApiProblem('WEBHOOK_EVENT_CONFLICT', 409);
+            }
+        }
+        return ['storage/webhooks/'.$name, $payloadHash];
     }
 
     private function validatePayment(string $productId, string $planId, string $currency, int $amountMinor, int $environment): void
