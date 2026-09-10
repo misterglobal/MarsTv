@@ -66,6 +66,54 @@ final class SupportService
         return $query->fetch() ?: throw new RuntimeException('Purchase not found');
     }
 
+    public function lookupPurchasesByEmail(string $email): array
+    {
+        $email = trim($email);
+        if (strlen($email) > 191 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            throw new InvalidArgumentException('Invalid receipt email');
+        }
+        $query = $this->db->prepare(
+            "SELECT p.provider,p.provider_order_id,p.product_id,p.amount_minor,p.currency,p.status purchase_status,
+                    p.purchased_at,p.refunded_at,l.license_uuid,l.status license_status,l.license_version,
+                    d.device_code current_device_code
+             FROM purchases p
+             LEFT JOIN licenses l ON l.purchase_id=p.id
+             LEFT JOIN devices d ON d.id=l.current_device_id
+             WHERE LOWER(p.customer_email)=LOWER(:email)
+             ORDER BY p.created_at DESC
+             LIMIT 25"
+        );
+        $query->execute(['email' => $email]);
+        $rows = $query->fetchAll();
+        if ($rows === []) throw new RuntimeException('Purchase not found');
+        return $rows;
+    }
+
+    public function previewTransfer(string $licenseUuid, string $newDeviceCode): array
+    {
+        $this->licenseUuid($licenseUuid);
+        $this->deviceCode($newDeviceCode);
+        $query = $this->db->prepare(
+            "SELECT l.license_uuid,l.status license_status,l.license_version,
+                    current_device.device_code current_device_code,
+                    target_device.device_code new_device_code,target_device.status new_device_status,
+                    occupying_license.license_uuid occupying_license_uuid
+             FROM licenses l
+             LEFT JOIN devices current_device ON current_device.id=l.current_device_id
+             LEFT JOIN devices target_device ON target_device.device_code=:device
+             LEFT JOIN licenses occupying_license ON occupying_license.current_device_id=target_device.id
+                AND occupying_license.status='active'
+             WHERE l.license_uuid=:license
+             LIMIT 1"
+        );
+        $query->execute(['license' => $licenseUuid, 'device' => $newDeviceCode]);
+        $preview = $query->fetch() ?: throw new RuntimeException('Licence not found');
+        if ($preview['new_device_code'] === null || $preview['new_device_status'] !== 'active') {
+            throw new RuntimeException('Active destination device not found');
+        }
+        return $preview;
+    }
+
     public function transferLicense(
         string $licenseUuid,
         string $newDeviceCode,

@@ -43,7 +43,7 @@ final class FreemiusWebhook
         }
         $this->validatePayment($fields['product_id'], $fields['plan_id'], $fields['currency'], $fields['amount_minor'], $fields['environment']);
 
-        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency'], $fields['environment']);
+        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency'], $fields['environment'], $fields['customer_email']);
         $eventRow = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $rawBody), $reference, $storedHash);
         if ($eventRow['processing_status'] === 'processed') return ['status' => 'duplicate'];
         return $this->dispatch((int) $eventRow['id'], $type, $fields);
@@ -75,6 +75,7 @@ final class FreemiusWebhook
             'amount_minor' => (int) ($payload['amount_minor'] ?? -1),
             'currency' => strtoupper((string) ($payload['currency'] ?? '')),
             'environment' => (int) ($payload['environment'] ?? -1),
+            'customer_email' => $this->customerEmail($payload['customer_email'] ?? null),
         ];
         $this->validatePayment($fields['product_id'], $fields['plan_id'], $fields['currency'], $fields['amount_minor'], $fields['environment']);
         return $this->dispatch((int) $row['id'], (string) $payload['type'], $fields);
@@ -140,7 +141,7 @@ final class FreemiusWebhook
     private function dispatch(int $eventId, string $type, array $fields): array
     {
         if ($type === 'payment.created') {
-            return $this->fulfill($eventId, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency']);
+            return $this->fulfill($eventId, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency'], $fields['customer_email']);
         }
         if (isset(self::TERMINAL_EVENT_STATES[$type])) {
             return $this->applyTerminalPaymentState($eventId, self::TERMINAL_EVENT_STATES[$type], $fields);
@@ -163,6 +164,7 @@ final class FreemiusWebhook
             'currency' => strtoupper((string) ($payment['currency'] ?? '')),
             'amount_minor' => $this->amountMinor($payment['gross'] ?? null),
             'environment' => $environment,
+            'customer_email' => $this->customerEmail($event['objects']['user']['email'] ?? null),
         ];
     }
 
@@ -176,7 +178,7 @@ final class FreemiusWebhook
         $paymentId = $this->identifier($dispute['payment_id'] ?? null);
         $productId = $this->identifier($dispute['plugin_id'] ?? null);
         $query = $this->db->prepare(
-            "SELECT p.product_id,p.amount_minor,p.currency,l.provider_license_id,l.plan_id
+            "SELECT p.product_id,p.amount_minor,p.currency,p.customer_email,l.provider_license_id,l.plan_id
              FROM purchases p
              JOIN licenses l ON l.purchase_id=p.id
              WHERE p.provider='freemius' AND p.provider_order_id=:payment
@@ -199,10 +201,11 @@ final class FreemiusWebhook
             'currency' => $currency,
             'amount_minor' => $amountMinor,
             'environment' => $environment,
+            'customer_email' => $this->customerEmail($local['customer_email'] ?? null),
         ];
     }
 
-    private function fulfill(int $eventId, string $paymentId, string $licenseId, string $planId, string $productId, int $amountMinor, string $currency): array
+    private function fulfill(int $eventId, string $paymentId, string $licenseId, string $planId, string $productId, int $amountMinor, string $currency, ?string $customerEmail): array
     {
         $this->db->beginTransaction();
         try {
@@ -219,8 +222,8 @@ final class FreemiusWebhook
             $purchaseQuery->execute(['payment' => $paymentId]);
             $purchaseId = $purchaseQuery->fetchColumn();
             if ($purchaseId === false) {
-                $purchase = $this->db->prepare("INSERT INTO purchases (provider,provider_order_id,activation_session_id,product_id,amount_minor,currency,status,purchased_at) VALUES ('freemius',:payment,:session,:product,:amount,:currency,'paid',UTC_TIMESTAMP())");
-                $purchase->execute(['payment' => $paymentId, 'session' => $row['activation_session_id'], 'product' => $productId, 'amount' => $amountMinor, 'currency' => $currency]);
+                $purchase = $this->db->prepare("INSERT INTO purchases (provider,provider_order_id,activation_session_id,customer_email,product_id,amount_minor,currency,status,purchased_at) VALUES ('freemius',:payment,:session,:email,:product,:amount,:currency,'paid',UTC_TIMESTAMP())");
+                $purchase->execute(['payment' => $paymentId, 'session' => $row['activation_session_id'], 'email' => $customerEmail, 'product' => $productId, 'amount' => $amountMinor, 'currency' => $currency]);
                 $purchaseId = (int) $this->db->lastInsertId();
             } else {
                 $stateQuery = $this->db->prepare('SELECT status FROM purchases WHERE id=:id LIMIT 1 FOR UPDATE');
@@ -233,8 +236,8 @@ final class FreemiusWebhook
                     $this->db->commit();
                     return ['status' => 'ignored_terminal'];
                 }
-                $this->db->prepare("UPDATE purchases SET status='paid',amount_minor=:amount,currency=:currency,purchased_at=COALESCE(purchased_at,UTC_TIMESTAMP()) WHERE id=:id")
-                    ->execute(['amount' => $amountMinor, 'currency' => $currency, 'id' => $purchaseId]);
+                $this->db->prepare("UPDATE purchases SET status='paid',customer_email=COALESCE(customer_email,:email),amount_minor=:amount,currency=:currency,purchased_at=COALESCE(purchased_at,UTC_TIMESTAMP()) WHERE id=:id")
+                    ->execute(['email' => $customerEmail, 'amount' => $amountMinor, 'currency' => $currency, 'id' => $purchaseId]);
             }
             $license = $this->db->prepare("INSERT INTO licenses (license_uuid,purchase_id,current_device_id,plan_id,provider_license_id,status,license_version) VALUES (:uuid,:purchase,:device,:plan,:provider_license,'active',1) ON DUPLICATE KEY UPDATE provider_license_id=VALUES(provider_license_id)");
             $license->execute(['uuid' => self::uuid(), 'purchase' => $purchaseId, 'device' => $row['device_id'], 'plan' => $planId, 'provider_license' => $licenseId]);
@@ -285,8 +288,8 @@ final class FreemiusWebhook
                 );
                 $claimQuery->execute(['license' => $fields['license_id'], 'plan' => $fields['plan_id'], 'payment' => $fields['payment_id']]);
                 $claim = $claimQuery->fetch() ?: throw new RuntimeException('No matching checkout claim for terminal payment event');
-                $insert = $this->db->prepare("INSERT INTO purchases (provider,provider_order_id,activation_session_id,product_id,amount_minor,currency,status,purchased_at,refunded_at) VALUES ('freemius',:payment,:session,:product,:amount,:currency,:status,NULL,UTC_TIMESTAMP())");
-                $insert->execute(['payment' => $fields['payment_id'], 'session' => $claim['activation_session_id'], 'product' => $fields['product_id'], 'amount' => $fields['amount_minor'], 'currency' => $fields['currency'], 'status' => $incomingState]);
+                $insert = $this->db->prepare("INSERT INTO purchases (provider,provider_order_id,activation_session_id,customer_email,product_id,amount_minor,currency,status,purchased_at,refunded_at) VALUES ('freemius',:payment,:session,:email,:product,:amount,:currency,:status,NULL,UTC_TIMESTAMP())");
+                $insert->execute(['payment' => $fields['payment_id'], 'session' => $claim['activation_session_id'], 'email' => $fields['customer_email'], 'product' => $fields['product_id'], 'amount' => $fields['amount_minor'], 'currency' => $fields['currency'], 'status' => $incomingState]);
                 $purchase = ['id' => (int) $this->db->lastInsertId(), 'status' => $incomingState];
                 $this->db->prepare('UPDATE freemius_checkout_claims SET claim_status=:status WHERE id=:id')
                     ->execute(['status' => $incomingState, 'id' => $claim['id']]);
@@ -400,18 +403,18 @@ final class FreemiusWebhook
 
     private function recordIgnored(string $id, string $type, array $event, string $raw): array
     {
-        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, '', '', '', '', 0, '', -1);
+        [$reference, $storedHash] = $this->storeEnvelope($id, $type, $event, '', '', '', '', 0, '', -1, null);
         $row = $this->ingest($id, $type, (string) ($event['created'] ?? ''), hash('sha256', $raw), $reference, $storedHash);
         $this->db->prepare("UPDATE webhook_events SET processing_status='processed',processing_result='ignored_event',processed_at=UTC_TIMESTAMP() WHERE id=:id AND processing_status<>'processed'")->execute(['id' => $row['id']]);
         return ['status' => 'ignored'];
     }
 
-    private function storeEnvelope(string $id, string $type, array $event, string $payment, string $license, string $plan, string $product, int $amount, string $currency, int $environment): array
+    private function storeEnvelope(string $id, string $type, array $event, string $payment, string $license, string $plan, string $product, int $amount, string $currency, int $environment, ?string $customerEmail): array
     {
         $directory = dirname(__DIR__).'/storage/webhooks';
         if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) throw new RuntimeException('Webhook storage unavailable');
         $name = hash('sha256', 'freemius|'.$id).'.json';
-        $payload = json_encode(['id' => $id, 'type' => $type, 'created' => $event['created'] ?? null, 'payment_id' => $payment, 'license_id' => $license, 'plan_id' => $plan, 'product_id' => $product, 'amount_minor' => $amount, 'currency' => $currency, 'environment' => $environment], JSON_THROW_ON_ERROR);
+        $payload = json_encode(['id' => $id, 'type' => $type, 'created' => $event['created'] ?? null, 'payment_id' => $payment, 'license_id' => $license, 'plan_id' => $plan, 'product_id' => $product, 'amount_minor' => $amount, 'currency' => $currency, 'environment' => $environment, 'customer_email' => $customerEmail], JSON_THROW_ON_ERROR);
         $path = $directory.'/'.$name;
         $payloadHash = hash('sha256', $payload);
         $handle = @fopen($path, 'x');
@@ -425,9 +428,10 @@ final class FreemiusWebhook
             }
         } else {
             $existing = is_readable($path) ? file_get_contents($path) : false;
-            if ($existing === false || !hash_equals(hash('sha256', $existing), $payloadHash)) {
-                throw new ApiProblem('WEBHOOK_EVENT_CONFLICT', 409);
-            }
+            if ($existing === false) throw new RuntimeException('Webhook storage unavailable');
+            // Preserve the first normalized envelope across redelivery and parser upgrades.
+            // ingest() separately rejects a changed raw payload for the same provider event ID.
+            $payloadHash = hash('sha256', $existing);
         }
         return ['storage/webhooks/'.$name, $payloadHash];
     }
@@ -455,6 +459,15 @@ final class FreemiusWebhook
         if (!is_int($value) && !is_float($value) && !is_string($value)) throw new ApiProblem('INVALID_REQUEST', 400);
         if (!preg_match('/^-?\d+(?:\.\d{1,2})?$/D', (string) $value)) throw new ApiProblem('INVALID_REQUEST', 400);
         return abs((int) round((float) $value * 100));
+    }
+
+    private function customerEmail(mixed $value): ?string
+    {
+        if ($value === null || $value === '') return null;
+        if (!is_string($value) || strlen($value) > 191 || filter_var($value, FILTER_VALIDATE_EMAIL) === false) {
+            throw new ApiProblem('INVALID_REQUEST', 400);
+        }
+        return strtolower($value);
     }
 
     private static function uuid(): string
