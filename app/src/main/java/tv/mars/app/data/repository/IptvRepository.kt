@@ -46,10 +46,11 @@ class IptvRepository(
 
     suspend fun refreshCatalog(
         account: IptvAccount,
+        onCatalogReady: suspend (Long) -> Unit = {},
         onInitialCatalogAvailable: suspend (Long) -> Unit = {},
     ): Long = when (account.sourceType) {
-        SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> loadXtream(account, onInitialCatalogAvailable)
-        SourceType.M3U -> loadM3u(account, onInitialCatalogAvailable)
+        SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> loadXtream(account, onInitialCatalogAvailable, onCatalogReady)
+        SourceType.M3U -> loadM3u(account, onInitialCatalogAvailable, onCatalogReady)
     }
 
     suspend fun catalogLoadedAt(accountId: String): Long? = roomCatalog.catalogLoadedAt(accountId)
@@ -177,10 +178,11 @@ class IptvRepository(
     private suspend fun loadM3u(
         account: IptvAccount,
         onInitialCatalogAvailable: suspend (Long) -> Unit,
+        onCatalogReady: suspend (Long) -> Unit,
     ): Long {
         // A refresh must not retain the previous episode graph while a new one is built.
         account.xtreamAccountFromM3u()?.let { xtreamAccount ->
-            val xtreamResult = runCatching { loadXtream(xtreamAccount, onInitialCatalogAvailable) }
+            val xtreamResult = runCatching { loadXtream(xtreamAccount, onInitialCatalogAvailable, onCatalogReady) }
             if (xtreamResult.isSuccess) {
                 return xtreamResult.getOrThrow()
             }
@@ -204,6 +206,7 @@ class IptvRepository(
                 "Movies: ${result.stats.movieEntries}; Series episodes: ${result.stats.seriesEpisodes}; " +
                 "Unclassified: ${result.stats.unclassifiedEntries}",
         )
+        onCatalogReady(roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis())
         if (result.epgUrl.isNotBlank()) {
             runCatching {
                 val resolvedEpg = resolve(account.m3uUrl, result.epgUrl)
@@ -224,6 +227,7 @@ class IptvRepository(
     private suspend fun loadXtream(
         account: IptvAccount,
         onInitialCatalogAvailable: suspend (Long) -> Unit,
+        onCatalogReady: suspend (Long) -> Unit,
     ): Long {
         val publishEarly = !roomCatalog.hasCatalog(account.id)
         val stats = xtreamRoomImporter.import(
@@ -236,6 +240,7 @@ class IptvRepository(
             "Xtream catalog: Live: ${stats.liveEntries}; Movies: ${stats.movieEntries}; " +
                 "Series: ${stats.seriesEntries}",
         )
+        onCatalogReady(roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis())
         runCatching {
             val references = roomCatalog.channelReferences(account.id)
             importProgrammes(account.id) { write -> xtream.streamProgrammeGuide(account, references, write) }

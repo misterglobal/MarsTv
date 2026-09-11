@@ -123,6 +123,7 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
         }
 
         LoadingOverlay(visible = state.isLoading && state.overlay != OverlayScreen.PLAYER)
+        tv.mars.app.updates.UpdateDialog(allowed = state.hasLoadedState && state.overlay != OverlayScreen.PLAYER)
     }
 }
 

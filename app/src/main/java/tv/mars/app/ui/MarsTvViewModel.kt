@@ -190,7 +190,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         catalogStartedAtElapsedMs = SystemClock.elapsedRealtime()
         Log.i(BENCHMARK_TAG, "catalog_start mode=connect source=$sourceType")
         catalogJob = viewModelScope.launch {
-            _uiState.update { it.copy(isConnecting = true, isCatalogLoading = true, errorMessage = null) }
+            _uiState.update { it.copy(isConnecting = true, isLoading = false, isCatalogLoading = true, errorMessage = null) }
             val resolvedServer = if (sourceType == SourceType.PRIVATE_XTREAM) {
                 BuildConfig.PRIVATE_PORTAL_URL
             } else {
@@ -327,9 +327,17 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             Log.i(BENCHMARK_TAG, "catalog_cache_miss refresh=true")
-            _uiState.update { it.copy(isLoading = true, isCatalogLoading = true, errorMessage = null) }
+            val hasUsableCatalog = repository.catalogLoadedAt(account.id) != null
+            _uiState.update { it.copy(isLoading = !hasUsableCatalog, isCatalogLoading = true, errorMessage = null) }
 
-            runCatching { repository.refreshCatalog(account) }
+            runCatching {
+                repository.refreshCatalog(account, onCatalogReady = { revision ->
+                    _uiState.update {
+                        it.copy(loadedCatalogAccountId = account.id, catalogRevision = revision,
+                            isLoading = false, isCatalogLoading = false)
+                    }
+                })
+            }
                 .onSuccess { revision ->
                     logCatalogCompleted()
                     catalogPersistence.clear(account.id)

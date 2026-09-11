@@ -25,6 +25,8 @@ providers.properties
 **/generated/
 **/out/
 **/tmp/
+__pycache__/
+*.pyc
 app/release/
 
 # APK/AAB artifacts
