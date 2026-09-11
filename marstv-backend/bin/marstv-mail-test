@@ -1,0 +1,26 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+require dirname(__DIR__).'/src/bootstrap.php';
+
+try {
+    $recipient = $argv[1] ?? '';
+    $sender = (string) config('transfer_mail_from');
+    foreach ([$recipient, $sender] as $address) {
+        if (strlen($address) > 191 || !filter_var($address, FILTER_VALIDATE_EMAIL) || preg_match('/[\r\n]/', $address)) {
+            throw new RuntimeException('Provide a valid test recipient and configure MARSTV_TRANSFER_MAIL_FROM.');
+        }
+    }
+    if (!function_exists('mail')) throw new RuntimeException('PHP mail() is unavailable on this host.');
+    $reference = strtoupper(bin2hex(random_bytes(4)));
+    $body = "MarsTV transfer email delivery test.\n\nReference: {$reference}\n\nThis message tests delivery only. It contains no activation code and does not change a licence.\n";
+    if (!@mail($recipient, 'MarsTV email delivery test '.$reference, $body, [
+        'From' => $sender, 'Content-Type' => 'text/plain; charset=UTF-8',
+    ])) throw new RuntimeException('The host did not accept the test email for delivery.');
+    fwrite(STDOUT, "Host accepted test email. Reference: {$reference}\nCheck the recipient inbox and spam folder; acceptance does not confirm delivery.\n");
+} catch (Throwable $error) {
+    fwrite(STDERR, $error instanceof RuntimeException ? $error->getMessage()."\n" : "Mail test failed. Check host mail configuration.\n");
+    exit(1);
+}

@@ -1,0 +1,13 @@
+.transfer-page { max-width: 800px; }
+.transfer-page h1 { font-size: clamp(2.2rem, 5vw, 3.5rem); }
+.transfer-page .notice { margin: 24px 0; }
+.transfer-card { margin: 28px 0; padding: clamp(20px, 4vw, 36px); background: #111726; border: 1px solid #364055; border-radius: 20px; }
+.transfer-card label { display: block; margin: 20px 0 8px; color: #f4f6fb; font-weight: 600; }
+.transfer-card input { display: block; width: 100%; box-sizing: border-box; padding: 14px; border: 1px solid #66748d; border-radius: 8px; background: #070a12; color: #fff; font: inherit; }
+.transfer-card input:focus-visible, .transfer-card button:focus-visible, .transfer-page a:focus-visible { outline: 3px solid #b5a2ff; outline-offset: 3px; }
+.transfer-card .button { margin-top: 20px; }
+.transfer-card .fineprint { color: #bdc7da; }
+.transfer-card [hidden] { display: none !important; }
+.transfer-card button:disabled { opacity: .65; cursor: wait; }
+#transfer-message { color: #ffe0c7; overflow-wrap: anywhere; }
+.transfer-page a { text-decoration: underline; }

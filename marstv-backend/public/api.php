@@ -5,6 +5,8 @@ declare(strict_types=1);
 require dirname(__DIR__).'/src/bootstrap.php';
 require dirname(__DIR__).'/src/ActivationApi.php';
 require dirname(__DIR__).'/src/DeviceApi.php';
+require dirname(__DIR__).'/src/SupportService.php';
+require dirname(__DIR__).'/src/TransferApi.php';
 require dirname(__DIR__).'/app/Domain/EntitlementSigner.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -25,7 +27,8 @@ function request_json(): array
     global $requestRawBody;
     $length = (int) ($_SERVER['CONTENT_LENGTH'] ?? 0);
     if ($length > 16384) throw new ApiProblem('INVALID_REQUEST', 413);
-    $raw = file_get_contents('php://input');
+    $raw = file_get_contents('php://input', false, null, 0, 16385);
+    if ($raw !== false && strlen($raw) > 16384) throw new ApiProblem('INVALID_REQUEST', 413);
     $requestRawBody = $raw === false ? '' : $raw;
     if ($raw === false || $raw === '') return [];
     $value = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
@@ -51,12 +54,22 @@ function request_headers_lower(): array
 try {
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiProblem('INVALID_REQUEST', 405);
     $path = parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH);
+    if (is_string($path) && str_starts_with($path, '/api/v1/transfers/')) {
+        $contentType = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? ''))[0]));
+        if ($contentType !== 'application/json') throw new ApiProblem('INVALID_REQUEST', 415);
+        $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+        if ($origin !== '' && $origin !== (string) config('base_url')) throw new ApiProblem('INVALID_REQUEST', 403);
+    }
     $input = request_json();
     $rawBody = $requestRawBody ?? '';
     $clientIp = (string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown');
     $api = new ActivationApi(database());
     $deviceApi = new DeviceApi(database());
+    $transferApi = new TransferApi(database());
     $result = match (true) {
+        $path === '/api/v1/transfers/request' => $transferApi->request($input, $clientIp),
+        $path === '/api/v1/transfers/verify' => $transferApi->verify($input, request_headers_lower(), $_COOKIE, $clientIp),
+        $path === '/api/v1/transfers/confirm' => $transferApi->confirm($input, request_headers_lower(), $_COOKIE, $clientIp),
         $path === '/api/v1/devices/register' => $deviceApi->register($input, $clientIp),
         preg_match('#^/api/v1/devices/([0-9a-f-]{36})/challenges$#D', (string) $path, $matches) === 1 => $deviceApi->challenge($matches[1], $input, $clientIp),
         preg_match('#^/api/v1/devices/([0-9a-f-]{36})/status$#D', (string) $path, $matches) === 1 => $deviceApi->status($matches[1], request_headers_lower(), $rawBody, $clientIp),

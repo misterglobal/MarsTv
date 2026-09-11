@@ -57,6 +57,9 @@ function config(string $key): mixed
         'api_base' => rtrim((string) env_value('MARSTV_API_BASE', '/api/v1'), '/'),
         'support_email' => env_value('MARSTV_SUPPORT_EMAIL', 'support@marstv.online'),
         'privacy_email' => env_value('MARSTV_PRIVACY_EMAIL', 'privacy@marstv.online'),
+        'transfer_portal_enabled' => filter_var(env_value('MARSTV_TRANSFER_PORTAL_ENABLED', 'false'), FILTER_VALIDATE_BOOLEAN),
+        'transfer_mail_from' => env_value('MARSTV_TRANSFER_MAIL_FROM'),
+        'transfer_code_pepper' => env_value('MARSTV_TRANSFER_CODE_PEPPER'),
         'price_label' => env_value('MARSTV_PRICE_LABEL', 'US $12.99 one time'),
         'apk_url' => env_value('MARSTV_APK_URL'),
         'apk_version' => env_value('MARSTV_APK_VERSION', 'Coming soon'),
@@ -137,6 +140,7 @@ function page_data(string $path): array
     return match ($path) {
         '/' => ['title' => 'Your channels. One orbit.', 'page' => 'home'],
         '/activate' => ['title' => 'Activate MarsTV Pro', 'page' => 'activate'],
+        '/transfer' => ['title' => 'Transfer MarsTV Pro', 'page' => 'transfer'],
         '/download' => ['title' => 'Download MarsTV', 'page' => 'download'],
         '/support' => ['title' => 'MarsTV Support', 'page' => 'support'],
         '/privacy' => ['title' => 'Privacy Policy', 'page' => 'privacy'],
