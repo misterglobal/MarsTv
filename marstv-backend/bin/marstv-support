@@ -20,6 +20,12 @@ try {
     if ($command === 'test-license:grant') {
         $result = $service->grantTestLicense((string) ($options['device'] ?? ''), (string) ($options['operator'] ?? ''), (string) ($options['reason'] ?? ''));
         fwrite(STDOUT, ($result['created'] ? 'Created' : 'Existing')." test licence {$result['license']['license_uuid']} for {$result['device']['device_code']}\n");
+    } elseif ($command === 'transfer:cleanup') {
+        $removed = database()->exec('DELETE FROM transfer_sessions WHERE expires_at < DATE_SUB(UTC_TIMESTAMP(),INTERVAL 24 HOUR) LIMIT 500');
+        fwrite(STDOUT, "Removed {$removed} expired transfer verification sessions\n");
+    } elseif ($command === 'purchase:sync-email') {
+        $changed = (new FreemiusReceipt())->repair(database(), (string) ($options['order'] ?? ''), (string) ($options['operator'] ?? ''));
+        fwrite(STDOUT, $changed ? "Receipt email recovered from Freemius and audited. No licence state changed.\n" : "Receipt email already present; no changes made.\n");
     } elseif ($command === 'purchase:lookup') {
         $hasOrder = isset($options['order']);
         $hasEmail = isset($options['email']);
@@ -75,6 +81,8 @@ try {
             "Commands:\n".
             "  test-license:grant --device=MARS-XXXX --operator=NAME --reason=TEXT\n".
             "  purchase:lookup (--order=PROVIDER_ORDER_ID | --email=RECEIPT_EMAIL)\n".
+            "  purchase:sync-email --order=PROVIDER_ORDER_ID --operator=NAME\n".
+            "  transfer:cleanup\n".
             "  license:transfer --license=UUID --new-device=MARS-XXXX --operator=NAME --reason=TEXT [--override-transfer-limit] [--non-interactive]\n".
             "  license:revoke --license=UUID --operator=NAME --reason=TEXT\n".
             "  webhook:replay --event=PROVIDER_EVENT_ID --operator=NAME --reason=TEXT\n".

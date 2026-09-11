@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__.'/FreemiusReceipt.php';
+
 final class FreemiusWebhook
 {
     private const MAX_BODY_BYTES = 1048576;
@@ -141,6 +143,14 @@ final class FreemiusWebhook
     private function dispatch(int $eventId, string $type, array $fields): array
     {
         if ($type === 'payment.created') {
+            if ($fields['customer_email'] === null && config('freemius_api_bearer_token')) {
+                try {
+                    $fields['customer_email'] = (new FreemiusReceipt())->email($fields['product_id'], $fields['payment_id'], $fields['license_id']);
+                } catch (Throwable) {
+                    // Email recovery must not prevent verified payment fulfilment.
+                    error_log('MarsTV receipt email lookup unavailable; use purchase:sync-email to recover');
+                }
+            }
             return $this->fulfill($eventId, $fields['payment_id'], $fields['license_id'], $fields['plan_id'], $fields['product_id'], $fields['amount_minor'], $fields['currency'], $fields['customer_email']);
         }
         if (isset(self::TERMINAL_EVENT_STATES[$type])) {

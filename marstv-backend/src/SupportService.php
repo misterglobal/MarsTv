@@ -120,20 +120,25 @@ final class SupportService
         string $operator,
         string $reason,
         bool $overrideLimit = false,
+        ?int $expectedVersion = null,
     ): array {
         $this->licenseUuid($licenseUuid);
         $this->deviceCode($newDeviceCode);
         $this->operator($operator);
         $this->reason($reason);
-        $this->db->beginTransaction();
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) $this->db->beginTransaction();
         try {
             $license = $this->lockedLicense($licenseUuid);
             if ($license['status'] !== 'active') throw new RuntimeException('Only an active licence can be transferred');
+            if ($expectedVersion !== null && (int) $license['license_version'] !== $expectedVersion) {
+                throw new RuntimeException('Licence changed; restart the transfer');
+            }
             $deviceQuery = $this->db->prepare("SELECT * FROM devices WHERE device_code=:code AND status='active' LIMIT 1 FOR UPDATE");
             $deviceQuery->execute(['code' => $newDeviceCode]);
             $newDevice = $deviceQuery->fetch() ?: throw new RuntimeException('Active destination device not found');
             if ((int) $license['current_device_id'] === (int) $newDevice['id']) {
-                $this->db->commit();
+                if ($ownsTransaction) $this->db->commit();
                 return ['changed' => false, 'license' => $license, 'device' => $newDevice];
             }
             $occupied = $this->db->prepare("SELECT license_uuid FROM licenses WHERE current_device_id=:device AND status='active' LIMIT 1 FOR UPDATE");
@@ -163,12 +168,12 @@ final class SupportService
                 ->execute(['license' => $license['id'], 'device' => $newDevice['id']]);
             $actionType = $overrideLimit ? 'license_transfer_override' : 'license_transfer';
             $this->audit($operator, $actionType, (int) $license['purchase_id'], (int) $license['id'], $oldDeviceId, (int) $newDevice['id'], $reason);
-            $this->db->commit();
+            if ($ownsTransaction) $this->db->commit();
             $license['license_version'] = (int) $license['license_version'] + 1;
             $license['current_device_id'] = $newDevice['id'];
             return ['changed' => true, 'license' => $license, 'device' => $newDevice];
         } catch (Throwable $error) {
-            if ($this->db->inTransaction()) $this->db->rollBack();
+            if ($ownsTransaction && $this->db->inTransaction()) $this->db->rollBack();
             throw $error;
         }
     }

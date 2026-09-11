@@ -7,6 +7,7 @@ RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L,NE]
 
 RewriteRule ^api/v1/(devices/register|devices/[0-9a-f-]{36}/(challenges|status)|activation-sessions|activation-sessions/(preview|redeem|resume)|checkout/(create|freemius/claim))$ api.php [QSA,L]
 RewriteRule ^api/v1/webhooks/payment$ webhook.php [L]
+RewriteRule ^api/v1/transfers/(request|verify|confirm)$ api.php [L]
 
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
