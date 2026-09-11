@@ -64,13 +64,13 @@ class NetworkClient {
             try {
                 val request = streamRequest(url)
                 client.newCall(request).awaitResponse().use { response ->
-                    if (!response.isSuccessful) throw HttpResponseException(responseError(response.code))
+                    if (!response.isSuccessful) throw SourceHttpException(response.code, responseError(response.code))
                     block(response.body.byteStream())
                 }
                 return@withContext
             } catch (error: IOException) {
                 currentCoroutineContext().ensureActive()
-                if (error is HttpResponseException || attempt == attempts - 1) throw error
+                if (error is SourceHttpException || attempt == attempts - 1) throw error
             }
         }
     }
@@ -86,7 +86,7 @@ class NetworkClient {
 
         client.newCall(request).awaitResponse().use { response ->
             if (!response.isSuccessful) {
-                throw HttpResponseException(responseError(response.code))
+                throw SourceHttpException(response.code, responseError(response.code))
             }
             NetworkPayload(
                 bytes = response.body.bytes(),
@@ -124,6 +124,7 @@ class NetworkClient {
         else -> "Source returned HTTP $code"
     }
 
-    private class HttpResponseException(message: String) : IOException(message)
 
 }
+
+internal class SourceHttpException(val statusCode: Int, message: String) : IOException(message)

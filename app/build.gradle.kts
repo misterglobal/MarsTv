@@ -29,6 +29,10 @@ val escapedPrivatePortalUrl = privatePortalUrl
 val marsBackendUrl = providerProperties.getProperty("MARSTV_BACKEND_URL", "https://marstv.online/api/v1/")
 require(marsBackendUrl.startsWith("https://")) { "MARSTV_BACKEND_URL must use HTTPS" }
 val entitlementPublicKeyPem = providerProperties.getProperty("MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM", "")
+val updatePublicKeyPem = providerProperties.getProperty("MARSTV_UPDATE_PUBLIC_KEY_FILE", "").takeIf(String::isNotBlank)
+    ?.let { rootProject.file(it).readText() }
+    ?: providerProperties.getProperty("MARSTV_UPDATE_PUBLIC_KEY_PEM", rootProject.file("app/update-public-key.txt").readText())
+val updateKeyId = providerProperties.getProperty("MARSTV_UPDATE_KEY_ID", "release-2026-01")
 fun String.asBuildConfigString() = replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
 
 val releaseSigningFile = rootProject.file("keystore.properties")
@@ -52,13 +56,15 @@ android {
         applicationId = "tv.mars.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "PRIVATE_PORTAL_URL", "\"$escapedPrivatePortalUrl\"")
         buildConfigField("String", "MARS_BACKEND_URL", "\"${marsBackendUrl.asBuildConfigString()}\"")
         buildConfigField("String", "ENTITLEMENT_PUBLIC_KEY_PEM", "\"${entitlementPublicKeyPem.asBuildConfigString()}\"")
+        buildConfigField("String", "UPDATE_PUBLIC_KEY_PEM", "\"${updatePublicKeyPem.asBuildConfigString()}\"")
+        buildConfigField("String", "UPDATE_KEY_ID", "\"${updateKeyId.asBuildConfigString()}\"")
     }
 
     signingConfigs {
@@ -105,6 +111,7 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)

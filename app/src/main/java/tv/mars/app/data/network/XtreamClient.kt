@@ -65,14 +65,16 @@ class XtreamClient(
             }
         }
 
-        var movieCount = 0
-        forEachArray(account, "get_vod_streams") { item ->
-            val categoryId = item.string("category_id").ifBlank { "uncategorized" }
+        val movieCount = streamMoviesWithCategoryFallback(
+            categoryIds = movieCategories.map { it.remoteId },
+            fetch = { category, consume ->
+                forEachArray(account, "get_vod_streams",
+                    extra = category?.let { mapOf("category_id" to it) }.orEmpty(), consume = consume)
+            },
+        ) { item, requestedCategory ->
+            val categoryId = item.string("category_id").ifBlank { requestedCategory ?: "uncategorized" }
             emitter.ensureCategory(account, ContentKind.MOVIE, categoryId, movieNames[categoryId], knownCategoryIds)
-            streamMovie(account, item, categoryId, movieNames[categoryId])?.let {
-                emitter.addMedia(it)
-                movieCount++
-            }
+            streamMovie(account, item, categoryId, movieNames[categoryId])?.let { emitter.addMedia(it) }
         }
 
         var seriesCount = 0
@@ -137,8 +139,13 @@ class XtreamClient(
     @OptIn(ExperimentalSerializationApi::class)
     private suspend fun getJson(url: String): JsonElement {
         var element: JsonElement = JsonObject(emptyMap<String, JsonElement>())
-        network.getStream(url) { stream ->
-            element = json.decodeFromStream<JsonElement>(stream)
+        try {
+            network.getStream(url) { stream ->
+                element = json.decodeFromStream<JsonElement>(stream)
+            }
+        } catch (error: SourceHttpException) {
+            val action = Uri.parse(url).getQueryParameter("action") ?: "account validation"
+            throw java.io.IOException("Xtream $action: source returned HTTP ${error.statusCode}", error)
         }
         return element
     }
@@ -158,10 +165,12 @@ class XtreamClient(
     private suspend fun forEachArray(
         account: IptvAccount,
         action: String,
+        extra: Map<String, String> = emptyMap(),
         consume: suspend (JsonObject) -> Unit,
     ) {
+        try {
         network.getStream(
-            endpoint(account, "player_api.php", mapOf("action" to action)),
+            endpoint(account, "player_api.php", mapOf("action" to action) + extra),
             retryOnFailure = false,
         ) { stream ->
             val iterator = json.decodeToSequence<JsonObject>(stream, DecodeSequenceMode.ARRAY_WRAPPED).iterator()
@@ -169,6 +178,9 @@ class XtreamClient(
                 currentCoroutineContext().ensureActive()
                 consume(iterator.next())
             }
+        }
+        } catch (error: SourceHttpException) {
+            throw java.io.IOException("Xtream $action: source returned HTTP ${error.statusCode}", error)
         }
     }
 

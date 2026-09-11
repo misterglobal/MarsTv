@@ -110,6 +110,7 @@ fun SettingsScreen(
             }
         }
 
+        item { tv.mars.app.updates.UpdateSettings() }
         item { SettingsHeading("TV sources") }
         items(accounts, key = IptvAccount::id) { account ->
             SettingsRow(
