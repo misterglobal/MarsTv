@@ -21,7 +21,6 @@ import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import tv.mars.app.entitlement.ActivationState
 import tv.mars.app.ui.components.MarsButton
-import tv.mars.app.ui.theme.MarsMuted
 import tv.mars.app.ui.theme.MarsMidnight
 import tv.mars.app.ui.theme.MarsRed
 import java.time.Instant
@@ -36,20 +35,21 @@ fun UpgradeScreen(lockedFeatureName: String?, activationState: ActivationState, 
             if (activationState is ActivationState.Ready) "Activate MarsTV Pro" else "MarsTV Pro",
             style = MaterialTheme.typography.headlineLarge,
             fontWeight = FontWeight.Black,
+            color = Color.White,
         )
-        Text("US $12.99 · one-time lifetime licence · one device", color = MarsMuted)
-        if (lockedFeatureName != null) Text("$lockedFeatureName requires MarsTV Pro")
+        Text("US $12.99 · one-time lifetime licence · one device", color = Color.White)
+        if (lockedFeatureName != null) Text("$lockedFeatureName requires MarsTV Pro", color = Color.White)
         Spacer(Modifier.height(16.dp))
         when (activationState) {
             ActivationState.Idle -> Benefits(onActivate)
             ActivationState.Loading -> CircularProgressIndicator(color = MarsRed)
             is ActivationState.Failed -> {
-                Text(activationState.message, color = MarsRed)
+                Text(activationState.message, color = Color.White)
                 Spacer(Modifier.height(12.dp))
                 MarsButton("Retry activation", onClick = onActivate)
             }
             is ActivationState.Ready -> ActivationDetails(activationState, onActivate)
-            ActivationState.Activated -> Text("MarsTV Pro is active on this device.")
+            ActivationState.Activated -> Text("MarsTV Pro is active on this device.", color = Color.White)
         }
         Spacer(Modifier.height(14.dp))
         MarsButton("Back", onClick = onBack)
@@ -62,7 +62,7 @@ private fun Benefits(onActivate: () -> Unit) {
         listOf("Multiple TV sources and profiles", "Full programme guide and catch-up", "Unlimited movie and series playback", "Global search, full history, and resume", "Unlimited favourites and parental controls").forEach {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Check, null, tint = MarsRed)
-                Text(it, Modifier.padding(start = 10.dp))
+                Text(it, Modifier.padding(start = 10.dp), color = Color.White)
             }
         }
     }
@@ -77,18 +77,19 @@ private fun ActivationDetails(state: ActivationState.Ready, onRenew: () -> Unit)
         while (remaining > 0) { delay(1_000); remaining = secondsRemaining(state.expiresAt) }
     }
     if (remaining == 0L) {
-        Text("This activation code has expired.", color = MarsRed)
+        Text("This activation code has expired.", color = Color.White)
         Spacer(Modifier.height(10.dp))
         MarsButton("Get a new code", onClick = onRenew)
         return
     }
     QrCode(state.qrPayload)
     Spacer(Modifier.height(10.dp))
-    Text("Visit ${state.activationUrl}", fontWeight = FontWeight.Bold)
-    Text("Device ID: ${state.deviceCode}")
+    Text("Visit ${state.activationUrl}", fontWeight = FontWeight.Bold, color = Color.White)
+    Text("Device ID: ${state.deviceCode}", color = Color.White)
     Surface(
         modifier = Modifier.padding(vertical = 8.dp),
-        color = Color.White,
+        color = MarsMidnight,
+        contentColor = Color.White,
         shape = RoundedCornerShape(12.dp),
         shadowElevation = 4.dp,
     ) {
@@ -96,12 +97,12 @@ private fun ActivationDetails(state: ActivationState.Ready, onRenew: () -> Unit)
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("ACTIVATION CODE", color = MarsMidnight, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-            Text(state.activationCode, color = MarsMidnight, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+            Text("ACTIVATION CODE", color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text(state.activationCode, color = Color.White, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
         }
     }
-    Text("Expires in ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", color = MarsMuted)
-    Text("Waiting for activation…", color = MarsMuted)
+    Text("Expires in ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", color = Color.White)
+    Text("Waiting for activation…", color = Color.White)
 }
 
 @Composable
