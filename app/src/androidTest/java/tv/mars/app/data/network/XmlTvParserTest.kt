@@ -13,6 +13,25 @@ class XmlTvParserTest {
     private val formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").withZone(ZoneOffset.UTC)
 
     @Test
+    fun historicalListingsDoNotHideCurrentAndUpcomingShows() = runBlocking {
+        val now = Instant.now()
+        val xml = buildString {
+            append("<tv>")
+            for (hour in -120..24) {
+                val start = now.plusSeconds(hour * 3_600L - 300)
+                val end = start.plusSeconds(3_600)
+                append("<programme channel=\"news\" start=\"${formatter.format(start)}\" stop=\"${formatter.format(end)}\"><title>Hour $hour</title></programme>")
+            }
+            append("</tv>")
+        }
+        val programmes = XmlTvParser().parseReferences(xml.byteInputStream(), listOf(XmlTvChannelReference("news", "News"))).getValue("news")
+        assertTrue(programmes.any { it.title == "Hour 0" })
+        assertTrue(programmes.any { it.title == "Hour 1" })
+        assertTrue(programmes.any { it.title == "Hour -1" })
+        assertTrue(programmes.size <= 64)
+    }
+
+    @Test
     fun streamingParserEmitsBoundedBatches() = runBlocking {
         val channels = List(100) { XmlTvChannelReference("channel-$it", "Channel $it") }
         val xml = fixture(channels, programmesPerChannel = 12)

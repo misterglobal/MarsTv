@@ -59,7 +59,7 @@ fun UpgradeScreen(lockedFeatureName: String?, activationState: ActivationState, 
 @Composable
 private fun Benefits(onActivate: () -> Unit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        listOf("Multiple TV sources and profiles", "Full programme guide and catch-up", "Unlimited movie and series playback", "Global search, full history, and resume", "Unlimited favourites and parental controls").forEach {
+        listOf("Multiple TV sources and profiles", "Full programme guide and catch-up", "Watch while browsing the live guide", "Unlimited movie and series playback", "Global search, full history, and resume", "Unlimited favourites and parental controls").forEach {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Check, null, tint = MarsRed)
                 Text(it, Modifier.padding(start = 10.dp), color = Color.White)

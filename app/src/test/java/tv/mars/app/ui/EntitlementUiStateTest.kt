@@ -14,6 +14,15 @@ import java.time.Instant
 
 class EntitlementUiStateTest {
     @Test
+    fun `guide preview requires its own feature grant`() {
+        assertFalse(MarsUiState(entitlementState = EntitlementState.Free).guidePreviewEnabled)
+        assertFalse(MarsUiState(entitlementState = EntitlementState.Loading).guidePreviewEnabled)
+        val pro = EntitlementState.Pro("plan", setOf(ProFeature.FULL_EPG), "device", "license", 1, Instant.MAX)
+        assertFalse(MarsUiState(entitlementState = pro).guidePreviewEnabled)
+        assertTrue(MarsUiState(entitlementState = pro.copy(features = setOf(ProFeature.PICTURE_IN_PICTURE))).guidePreviewEnabled)
+    }
+
+    @Test
     fun `free state preserves but limits favourites and history`() {
         val favourites = (1..25).map { "item-$it" }.toSet()
         val history = (1..25).map {

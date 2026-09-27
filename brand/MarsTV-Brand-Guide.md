@@ -48,4 +48,9 @@ Use Inter where brand fonts can be bundled. Use the Android system sans-serif in
 - `brand/marstv-logo.svg`: horizontal brand mark
 - `brand/marstv-icon.svg`: general square icon
 - `app/src/main/res/drawable/ic_launcher_foreground.xml`: Android adaptive-icon foreground
-- `app/src/main/res/drawable/tv_banner.xml`: Android TV launcher banner
+- `app/src/main/res/drawable/tv_banner.xml`: source vector for the TV launcher banner
+- `app/src/main/res/drawable-xhdpi/tv_launcher_banner.png`: packaged TV banner
+- `app/src/main/res/mipmap-nodpi/ic_launcher_legacy.png`: explicit launcher-activity icon for launchers without adaptive-icon support
+- `app/src/main/res/mipmap-*/ic_launcher*.png`: branded legacy application icons
+
+Regenerate PNGs from the existing vector artwork with `python tools/render_launcher_icons.py` (requires `resvg-py==0.5.0`). Both the application (including roundIcon) and launcher activity explicitly reference the legacy bitmap. This ensures launchers reading either package or activity metadata receive PNG artwork, including Fire launchers without adaptive-icon support. Keep both MAIN launcher categories and the application/activity TV banners. Adaptive source assets remain available for a future platform-specific variant.

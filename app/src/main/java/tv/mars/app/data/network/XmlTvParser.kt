@@ -57,9 +57,9 @@ class XmlTvParser {
         val directIds = channels.map(XmlTvChannelReference::epgId).toSet()
         val nameToId = channels.associate { normalize(it.name) to it.epgId }
         val programmeLimitPerChannel = (MAX_PROGRAMMES_TOTAL / directIds.size.coerceAtLeast(1))
-            .coerceIn(MIN_PROGRAMMES_PER_CHANNEL, MAX_PROGRAMMES_PER_CHANNEL)
+            .coerceIn(1, MAX_PROGRAMMES_PER_CHANNEL)
         val idRemap = mutableMapOf<String, String>()
-        val programmeCounts = mutableMapOf<String, Int>()
+        val retained = mutableMapOf<String, GuideProgrammeRetention>()
         val now = System.currentTimeMillis()
         val earliestProgrammeEnd = now - PAST_WINDOW_MS
         val latestProgrammeStart = now + FUTURE_WINDOW_MS
@@ -114,31 +114,36 @@ class XmlTvParser {
                     }
                     "programme" -> {
                         val effectiveId = idRemap[programmeChannel] ?: programmeChannel.takeIf { it in directIds }
-                        val channelCount = effectiveId?.let { programmeCounts[it] } ?: 0
                         if (
                             effectiveId != null && title.isNotBlank() &&
+                            (effectiveId in retained || retained.size < MAX_PROGRAMMES_TOTAL / programmeLimitPerChannel) &&
                             programmeStart > 0 && programmeEnd > programmeStart &&
-                            programmeEnd >= earliestProgrammeEnd && programmeStart <= latestProgrammeStart &&
-                            programmeCount < MAX_PROGRAMMES_TOTAL && channelCount < programmeLimitPerChannel
+                            programmeEnd >= earliestProgrammeEnd && programmeStart <= latestProgrammeStart
                         ) {
-                            batch += Programme(
+                            retained.getOrPut(effectiveId) { GuideProgrammeRetention(programmeLimitPerChannel, now) }.add(Programme(
                                 channelEpgId = effectiveId,
                                 title = title.trim().take(MAX_TITLE_CHARS),
                                 description = description.trim().take(MAX_DESCRIPTION_CHARS),
                                 startMs = programmeStart,
                                 endMs = programmeEnd,
-                            )
-                            programmeCounts[effectiveId] = channelCount + 1
-                            programmeCount++
-                            if (batch.size == batchSize) {
-                                emit(batch)
-                                batch = ArrayList(batchSize)
-                            }
+                            ))
                         }
                     }
                 }
             }
             event = parser.next()
+        }
+        for (selection in retained.values) {
+            for (programme in selection.programmes()) {
+                currentCoroutineContext().ensureActive()
+                if (programmeCount >= MAX_PROGRAMMES_TOTAL) break
+                batch += programme
+                programmeCount++
+                if (batch.size == batchSize) {
+                    emit(batch)
+                    batch = ArrayList(batchSize)
+                }
+            }
         }
         if (batch.isNotEmpty()) emit(batch)
         return XmlTvParseStats(programmeCount)
@@ -170,7 +175,6 @@ class XmlTvParser {
         const val DEFAULT_BATCH_SIZE = 500
         const val MAX_BATCH_SIZE = 500
         const val MAX_PROGRAMMES_TOTAL = 100_000
-        const val MIN_PROGRAMMES_PER_CHANNEL = 8
         const val MAX_PROGRAMMES_PER_CHANNEL = 64
         const val MAX_TITLE_CHARS = 300
         const val MAX_DESCRIPTION_CHARS = 1_000

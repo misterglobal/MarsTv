@@ -36,6 +36,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
+import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,6 +61,7 @@ import tv.mars.app.core.ContentKind
 import tv.mars.app.core.OverlayScreen
 import tv.mars.app.ui.components.ErrorBanner
 import tv.mars.app.ui.components.FocusSurface
+import tv.mars.app.ui.components.RemoteNavigation
 import tv.mars.app.ui.components.LoadingOverlay
 import tv.mars.app.ui.components.MarsLogo
 import tv.mars.app.ui.screens.AccountSetupScreen
@@ -68,18 +81,34 @@ import tv.mars.app.ui.theme.MarsSurface
 import tv.mars.app.ui.theme.MarsViolet
 import tv.mars.app.ui.theme.MarsWhite
 
+internal val LocalGuidePreviewBounds = staticCompositionLocalOf<(Rect) -> Unit> { {} }
+
 @Composable
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val playerRequest = state.playerRequest
     val selectedSeries = state.selectedSeries
+    var previewBounds by remember { mutableStateOf(Rect.Zero) }
+    val liveGuidePlayback = state.canReturnToLiveGuide
+    val liveSession = liveGuidePlayback && state.destination == MainDestination.LIVE
+    val fullscreen = state.overlay == OverlayScreen.PLAYER
+    val density = LocalDensity.current
+    LaunchedEffect(state.destination, state.activeAccount?.id, state.overlay) {
+        if (playerRequest != null && !fullscreen && (!liveSession || state.overlay != OverlayScreen.NONE)) {
+            viewModel.stopGuidePreview()
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize().background(MarsMidnight)) {
+
+    RemoteNavigation(
+        isTelevision = isTelevision,
+        screenKey = listOf(state.hasLoadedState, state.overlay, state.destination, state.local.accounts.isEmpty()),
+        modifier = Modifier.fillMaxSize().background(MarsMidnight),
+    ) {
         when {
             !state.hasLoadedState -> SplashScreen()
-            state.overlay == OverlayScreen.PLAYER && playerRequest != null -> {
-                PlayerScreen(request = playerRequest, onClose = viewModel::closePlayer)
-            }
+            fullscreen && playerRequest != null && !liveGuidePlayback -> Unit
             state.overlay == OverlayScreen.SERIES_DETAILS && selectedSeries != null -> {
                 SeriesDetailsScreen(
                     details = selectedSeries,
@@ -118,8 +147,28 @@ fun MarsTvRoot(viewModel: MarsTvViewModel, isTelevision: Boolean) {
                 )
             }
             else -> {
-                HomeShell(state = state, viewModel = viewModel, isTelevision = isTelevision)
+                CompositionLocalProvider(LocalGuidePreviewBounds provides { previewBounds = it }) {
+                    Box(Modifier.focusProperties { onEnter = { if (fullscreen) cancelFocusChange() } }.focusGroup()) {
+                        HomeShell(state = state, viewModel = viewModel, isTelevision = isTelevision)
+                    }
+                }
             }
+        }
+
+        if (playerRequest != null && (fullscreen || (liveSession && state.overlay == OverlayScreen.NONE))) {
+            val playerModifier = if (fullscreen) Modifier.fillMaxSize() else with(density) {
+                Modifier.offset { IntOffset(previewBounds.left.roundToInt(), previewBounds.top.roundToInt()) }
+                    .size(previewBounds.width.toDp(), previewBounds.height.toDp())
+            }
+            PlayerScreen(
+                request = playerRequest,
+                modifier = playerModifier,
+                compact = !fullscreen,
+                onClose = { position, duration ->
+                    if (liveGuidePlayback && fullscreen) viewModel.minimizeGuidePlayer()
+                    else viewModel.closePlayer(position, duration)
+                },
+            )
         }
 
         LoadingOverlay(visible = state.isLoading && state.overlay != OverlayScreen.PLAYER)
@@ -150,6 +199,7 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
                 profileName = state.activeProfile?.name.orEmpty(),
                 isPro = state.isPro,
                 onProfiles = viewModel::showProfiles,
+                compact = isTelevision && state.destination == MainDestination.LIVE,
             )
             ErrorBanner(
                 message = state.errorMessage,
@@ -186,9 +236,9 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
 }
 
 @Composable
-private fun HomeTopBar(accountName: String, profileName: String, isPro: Boolean, onProfiles: () -> Unit) {
+private fun HomeTopBar(accountName: String, profileName: String, isPro: Boolean, onProfiles: () -> Unit, compact: Boolean = false) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(70.dp).background(MarsMidnight).padding(horizontal = 18.dp),
+        modifier = Modifier.fillMaxWidth().height(if (compact) 48.dp else 70.dp).background(MarsMidnight).padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
@@ -236,12 +286,19 @@ private fun DestinationContent(
             blockedCategoryKeys = blockedCategoryKeys,
             favouriteKeys = state.favouriteKeys,
             fullEpgEnabled = state.fullEpgEnabled,
+            isTelevision = isTelevision,
+            previewRequest = state.playerRequest.takeIf { state.canReturnToLiveGuide },
+            playerFullscreen = state.overlay == OverlayScreen.PLAYER,
+            onExpandPreview = viewModel::expandGuidePlayer,
+            onStopPreview = { viewModel.closePlayer(0, 0) },
             profileHasPin = hasPin,
             isCategoryLocked = viewModel::isCategoryLocked,
             pinMatches = viewModel::pinMatches,
             onUnlockCategory = viewModel::unlockCategory,
-            onPlayChannel = viewModel::playChannel,
-            onPlayProgramme = viewModel::playProgramme,
+            onPlayChannel = viewModel::playGuideChannel,
+            onPlayProgramme = { channel, programme ->
+                if (programme.isLive) viewModel.playGuideChannel(channel) else viewModel.playProgramme(channel, programme)
+            },
             onToggleFavourite = viewModel::toggleFavourite,
             onOpenSettings = openSettings,
             modifier = modifier,

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -97,6 +98,10 @@ data class MarsUiState(
 
     val isPro: Boolean
         get() = entitlementState is EntitlementState.Pro
+
+    val guidePreviewEnabled: Boolean
+        get() = entitlementState is EntitlementState.Pro &&
+            ProFeature.PICTURE_IN_PICTURE in entitlementState.features
 
     val watchHistory: List<WatchRecord>
         get() {
@@ -421,8 +426,9 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         channelEpgId: String,
         windowStart: Long,
         windowEnd: Long,
-    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd).map { programmes ->
-        if (entitlementPolicy.canUseFullEpg()) programmes else currentAndNextProgrammes(programmes)
+    ): Flow<List<Programme>> = repository.programmes(accountId, channelEpgId, windowStart, windowEnd).combine(entitlementManager.state) { programmes, entitlement ->
+        if (entitlement is EntitlementState.Pro && ProFeature.FULL_EPG in entitlement.features) programmes
+        else currentAndNextProgrammes(programmes)
     }
 
     suspend fun searchCatalog(
@@ -451,7 +457,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     ): CatalogLookup = repository.favouriteCatalog(accountId, favouriteKeys, blockedCategoryKeys)
 
     fun setDestination(destination: MainDestination) {
-        _uiState.update { it.copy(destination = destination, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }
+        _uiState.update { it.copy(destination = destination, playerRequest = if (destination == it.destination) it.playerRequest else null, searchQuery = if (destination == MainDestination.SEARCH) it.searchQuery else "") }
     }
 
     fun showAddAccount() {
@@ -494,6 +500,26 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
     fun playChannel(channel: Channel) {
         val account = _uiState.value.local.accounts.firstOrNull { it.id == channel.accountId } ?: return
         openPlayer(repository.liveRequest(account, channel))
+    }
+
+    fun playGuideChannel(channel: Channel) {
+        val state = _uiState.value
+        if (!state.guidePreviewEnabled) return playChannel(channel)
+        val account = state.activeAccount?.takeIf { it.id == channel.accountId } ?: return
+        val request = repository.liveRequest(account, channel)
+        _uiState.update {
+            it.copy(playerRequest = request, overlay = if (it.playerRequest?.url == request.url) OverlayScreen.PLAYER else OverlayScreen.NONE)
+        }
+    }
+
+    fun expandGuidePlayer() {
+        if (_uiState.value.playerRequest != null) _uiState.update { it.copy(overlay = OverlayScreen.PLAYER) }
+    }
+
+    fun stopGuidePreview() = _uiState.update { it.copy(playerRequest = null) }
+
+    fun minimizeGuidePlayer() {
+        _uiState.update { it.returnToLiveGuide() }
     }
 
     fun playProgramme(channel: Channel, programme: Programme) {
