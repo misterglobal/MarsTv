@@ -29,13 +29,22 @@ python tools/release_manifest.py sign `
   --build-tools "$env:LOCALAPPDATA/Android/Sdk/build-tools/36.0.0" `
   --java 'C:/Program Files/Android/Android Studio/jbr/bin/java.exe' `
   --private-key .artifacts/release-keys/release-private.pem `
-  --url https://marstv.online/downloads/MarsTV-0.3.1.apk `
-  --notes .artifacts/release-notes-0.3.1.txt `
-  --previous-version-code 3 `
+  --url https://marstv.online/downloads/MarsTV-0.3.2.apk `
+  --notes .artifacts/release-notes-0.3.2.txt `
+  --previous-version-code 4 `
   --output .artifacts/direct-stable.jws
 ```
 
 The companion JSON is for reviewing release metadata. Only the compact `.jws` file is consumed by clients. Do not edit it after signing. `--previous-version-code` must reflect the last published release; the tool does not query the production server.
+
+### Archive crash diagnostics with each release
+
+Release builds request full native debug symbols (`ndk.debugSymbolLevel = "FULL"`). After building, archive these files with the exact APK, version code and SHA-256:
+
+- `app/build/outputs/mapping/release/mapping.txt` for Kotlin/Java crash deobfuscation.
+- `app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip` for native crash symbolication, when the native libraries contain extractable symbols.
+
+Copy these outputs into a separate version-specific release archive before the next build overwrites them. Keep them out of the public APK download directory. Already-stripped third-party libraries may provide no symbols; enabling `FULL` cannot recover debug information removed by their publishers. These files must come from the same build as the APK being diagnosed.
 
 ## Publish through cPanel
 
@@ -46,6 +55,24 @@ The companion JSON is for reviewing release metadata. Only the compact `.jws` fi
 5. Check that `/api/v1/releases/direct-stable` returns HTTP 200 with `Content-Type: application/jose`. Removing/renaming the private `.jws` file makes the endpoint return 404 and pauses new downloads/install starts.
 
 No database migration or cron job is needed for updates. Keep the transfer cleanup cron unchanged. A future Play variant must disable this direct updater and its installation permission in favour of Play-managed updates.
+
+## Troubleshooting update discovery
+
+### Fire OS 6 compatibility
+
+The compatibility build supports Android 7.1 (API 25), including Fire OS 6, with the same package and production signing key. Core library desugaring supplies the date/time and Base64 APIs used by activation, guide parsing, and signed updates. Notification channels and per-app installation permission checks run only on Android 8 and newer. On Fire OS 6, enable Apps from Unknown Sources in the device's developer settings when installing APKs; Android's installer still requires confirmation.
+
+Version 0.3.2 (code 5) includes this compatibility support. Earlier local `0.3.1-*-test.apk` files are unpublished builds, still version code 4; never replace the published 0.3.1 APK with them.
+
+### Fire TV launcher artwork
+
+Version 0.3.2 explicitly supplies a PNG for application icon, round icon, and launcher activity icon, plus a PNG TV banner on the application and activity. The previous test APK only changed the activity icon and left the application pointing at an adaptive icon. Verify the release APK's `aapt2 dump badging` application-icon and launchable-activity entries resolve to PNG files.
+
+Physical Fire TV home-screen rendering remains a device acceptance check. Install the update over the existing app, open it once, then check the app library and home screen; restart the Firestick if old artwork remains cached. Do not uninstall or clear MarsTV data to refresh artwork. APK metadata does not guarantee home-screen placement or Amazon Appstore-style promotional tiles.
+
+### Update verification failures
+
+If a manual check says "Could not verify an update", check the device's date and time as well as the endpoint and manifest signature. The client rejects a manifest whose `publishedAt` is more than five minutes ahead of the device clock. An emulator resumed from an old snapshot can have a stale clock even with automatic time enabled; synchronize its clock and retry the manual check after the one-minute cooldown. A foreground automatic check can remain throttled for six hours.
 
 ## Acceptance before public rollout
 

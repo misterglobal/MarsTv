@@ -195,7 +195,7 @@ class DirectUpdateManager(private val context: Context) {
                     check(fetchManifest()?.second == release) { "Release withdrawn" }
                     verifyArchive(apk, release)
                     withContext(Dispatchers.Main) {
-                        if (!context.packageManager.canRequestPackageInstalls()) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
                             openInstallSettings()
                             mutable.value = state.value.copy(message = "Allow MarsTV to install updates, then return and select Install update again.")
                         } else {
@@ -249,8 +249,10 @@ class DirectUpdateManager(private val context: Context) {
     private fun notifyRelease(release: UpdateManifest) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled() || preferences.getLong("notified_version", 0) == release.versionCode) return
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel("app_updates", "MarsTV updates", NotificationManager.IMPORTANCE_DEFAULT))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel("app_updates", "MarsTV updates", NotificationManager.IMPORTANCE_DEFAULT))
+        }
         val intent = Intent(context, MainActivity::class.java).putExtra("show_updates", true)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending = PendingIntent.getActivity(context, 410, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)

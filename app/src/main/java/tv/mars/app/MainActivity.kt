@@ -1,6 +1,8 @@
 package tv.mars.app
 
 import android.content.pm.PackageManager
+import android.app.UiModeManager
+import android.content.res.Configuration
 import android.os.Bundle
 import android.content.Intent
 import androidx.lifecycle.lifecycleScope
@@ -26,7 +28,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (intent.getBooleanExtra("show_updates", false)) (application as MarsTvApplication).updates.open()
         enableEdgeToEdge()
-        val isTelevision = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        val isTelevision = packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            getSystemService(UiModeManager::class.java).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
         setContent {
             MarsTvTheme {
                 val viewModel: MarsTvViewModel = androidx.lifecycle.viewmodel.compose.viewModel()

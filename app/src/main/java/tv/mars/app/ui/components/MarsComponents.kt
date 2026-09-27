@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -152,7 +151,6 @@ fun FocusSurface(
         onClick = onClick,
         modifier = modifier
             .onFocusChanged { focused = it.isFocused }
-            .focusable()
             .border(if (focused || selected) 2.dp else 0.dp, borderColor, RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         color = if (focused) MarsSurfaceRaised else MarsSurface,

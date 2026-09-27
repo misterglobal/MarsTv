@@ -1,7 +1,9 @@
 package tv.mars.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,14 +18,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -45,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -61,18 +57,31 @@ import tv.mars.app.core.Channel
 import tv.mars.app.core.Programme
 import tv.mars.app.ui.components.EmptyState
 import tv.mars.app.ui.components.FocusSurface
-import tv.mars.app.ui.theme.MarsMidnight
 import tv.mars.app.ui.theme.MarsMuted
 import tv.mars.app.ui.theme.MarsRed
 import tv.mars.app.ui.theme.MarsSuccess
 import tv.mars.app.ui.theme.MarsSurface
-import tv.mars.app.ui.theme.MarsSurfaceRaised
-import tv.mars.app.ui.theme.MarsViolet
 import tv.mars.app.ui.theme.MarsWhite
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.Flow
+
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.*
+import tv.mars.app.core.PlayerRequest
+import tv.mars.app.ui.LocalGuidePreviewBounds
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun LiveGuideScreen(
@@ -91,262 +100,281 @@ fun LiveGuideScreen(
     onPlayProgramme: (Channel, Programme) -> Unit,
     onToggleFavourite: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    isTelevision: Boolean = false,
+    previewRequest: PlayerRequest? = null,
+    playerFullscreen: Boolean = false,
+    onExpandPreview: () -> Unit = {},
+    onStopPreview: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var selectedCategory by remember(accountId) { mutableStateOf<String?>(null) }
+    var selectedCategory by rememberSaveable(accountId) { mutableStateOf<String?>(null) }
+    var categoriesExpanded by rememberSaveable { mutableStateOf(false) }
     var pendingUnlock by remember { mutableStateOf<Category?>(null) }
-    var guideOffsetMs by remember { mutableLongStateOf(0L) }
-    val categories by remember(accountId) { categoriesSource() }
-        .collectAsStateWithLifecycle(initialValue = emptyList())
+    var guideOffsetMs by rememberSaveable(accountId) { mutableLongStateOf(0L) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var highlighted by remember(accountId) { mutableStateOf<Pair<Channel, Programme>?>(null) }
+    var details by remember(accountId) { mutableStateOf<Pair<Channel, Programme>?>(null) }
+    var lastFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    val previewFocus = remember { FocusRequester() }
+    val categoryButtonFocus = remember { FocusRequester() }
+    val selectedCategoryFocus = remember { FocusRequester() }
+    val firstChannelFocus = remember { FocusRequester() }
+    val categoryListState = rememberLazyListState()
+    val navigationScope = rememberCoroutineScope()
+    var focusNewCategory by remember { mutableStateOf(false) }
+    fun closeCategories() {
+        categoriesExpanded = false
+        navigationScope.launch {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { (lastFocus ?: categoryButtonFocus).requestFocus() }
+                .onFailure { categoryButtonFocus.requestFocus() }
+        }
+    }
+    fun selectCategory(key: String?) {
+        if (selectedCategory == key) closeCategories()
+        else {
+            selectedCategory = key
+            categoriesExpanded = false
+            lastFocus = null
+            focusNewCategory = true
+        }
+    }
+    val categories by remember(accountId) { categoriesSource() }.collectAsStateWithLifecycle(emptyList())
     val channels = remember(accountId, selectedCategory, blockedCategoryKeys) {
         channelsSource(selectedCategory, blockedCategoryKeys)
     }.collectAsLazyPagingItems()
-
+    val listState = rememberLazyListState()
+    val onPreviewBounds = LocalGuidePreviewBounds.current
+    val halfHour = 30 * 60_000L
+    val windowStart = now / halfHour * halfHour + guideOffsetMs
+    val windowEnd = windowStart + 2 * 3_600_000L
+    val formatter = remember { DateTimeFormatter.ofPattern("EEE h:mm a").withZone(ZoneId.systemDefault()) }
+    fun moveWindow(direction: Int) {
+        if (fullEpgEnabled) guideOffsetMs = (guideOffsetMs + direction * 2 * 3_600_000L)
+            .coerceIn(-7 * 24 * 3_600_000L, 14 * 24 * 3_600_000L)
+    }
+    BackHandler(enabled = categoriesExpanded && !playerFullscreen && pendingUnlock == null) { closeCategories() }
+    LaunchedEffect(categoriesExpanded) {
+        if (categoriesExpanded) {
+            val index = categories.indexOfFirst { it.key == selectedCategory } + 1
+            categoryListState.scrollToItem(index.coerceAtLeast(0))
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { selectedCategoryFocus.requestFocus() }
+        }
+    }
+    LaunchedEffect(focusNewCategory, channels.loadState.refresh, channels.itemCount) {
+        if (focusNewCategory && channels.loadState.refresh !is LoadState.Loading) {
+            listState.scrollToItem(0)
+            androidx.compose.runtime.withFrameNanos { }
+            val target = if (channels.itemCount > 0) firstChannelFocus else categoryButtonFocus
+            runCatching { target.requestFocus() }.onSuccess { focusNewCategory = false }
+        }
+    }
+    LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
+    LaunchedEffect(fullEpgEnabled) { if (!fullEpgEnabled) guideOffsetMs = 0 }
+    LaunchedEffect(playerFullscreen) {
+        if (!playerFullscreen) {
+            androidx.compose.runtime.withFrameNanos { }
+            runCatching { (lastFocus ?: previewFocus).requestFocus() }.onFailure { runCatching { previewFocus.requestFocus() } }
+        }
+    }
     LaunchedEffect(categories, selectedCategory) {
         if (selectedCategory != null && categories.none { it.key == selectedCategory }) selectedCategory = null
     }
-
-    Column(modifier = modifier.fillMaxSize()) {
-        GuideHeader(
-            categories = categories,
-            selectedCategory = selectedCategory,
-            isLocked = isCategoryLocked,
-            fullEpgEnabled = fullEpgEnabled,
-            onSelect = { category ->
-                if (category != null && isCategoryLocked(category.key)) pendingUnlock = category
-                else selectedCategory = category?.key
-            },
-            onEarlier = { guideOffsetMs -= 2 * 60 * 60 * 1000L },
-            onNow = { guideOffsetMs = 0L },
-            onLater = { guideOffsetMs += 2 * 60 * 60 * 1000L },
-        )
-
-        when {
-            channels.loadState.refresh is LoadState.Loading ->
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            channels.loadState.refresh is LoadState.Error ->
-                EmptyState("Could not load live channels", "Refresh this account and try again.")
-            channels.itemCount == 0 ->
-                EmptyState("No live channels", "Try another category or refresh this account.")
-            else -> {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(
-                    count = channels.itemCount,
-                    key = { index -> channels.peek(index)?.key ?: "live-placeholder-$index" },
-                ) { index ->
-                    channels[index]?.let { channel ->
-                        ChannelGuideRow(
-                            channel = channel,
-                            programmesSource = programmesSource,
-                            guideOffsetMs = guideOffsetMs,
-                            favourite = channel.key in favouriteKeys,
-                            onPlayChannel = { onPlayChannel(channel) },
-                            onPlayProgramme = { onPlayProgramme(channel, it) },
-                            onFavourite = { onToggleFavourite(channel.key) },
-                        )
+    Column(modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FocusSurface(onClick = { if (categoriesExpanded) closeCategories() else categoriesExpanded = true },
+                modifier = Modifier.width(180.dp).focusRequester(categoryButtonFocus), selected = categoriesExpanded) {
+                Text(categories.firstOrNull { it.key == selectedCategory }?.name ?: "All channels",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    color = MarsWhite, fontWeight = FontWeight.Bold, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
+            Text(formatter.format(Instant.ofEpochMilli(windowStart)), modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = MarsWhite)
+            if (fullEpgEnabled) AssistChip(onClick = { moveWindow(-1) }, label = { Text("Earlier") })
+            AssistChip(onClick = { guideOffsetMs = 0 }, label = { Text("Now") })
+            if (fullEpgEnabled) AssistChip(onClick = { moveWindow(1) }, label = { Text("Later") })
+        }
+        if (previewRequest != null) {
+            Row(Modifier.fillMaxWidth().height(96.dp).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusSurface(onClick = onExpandPreview, modifier = Modifier.width(160.dp).fillMaxHeight().focusRequester(previewFocus)) {
+                    // Leave the focus border visible around the root-owned video surface.
+                    Box(Modifier.fillMaxSize().padding(3.dp)) {
+                        Box(Modifier.fillMaxSize().onGloballyPositioned { onPreviewBounds(it.boundsInRoot()) })
                     }
                 }
-                if (channels.loadState.append is LoadState.Loading) {
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+                Column(Modifier.weight(1f)) {
+                    Text("Playing: ${previewRequest.title}", maxLines = 1, style = MaterialTheme.typography.labelMedium, color = MarsSuccess)
+                    Text(highlighted?.second?.title ?: previewRequest.title, maxLines = 1, fontWeight = FontWeight.Bold, color = MarsWhite)
+                    Text(highlighted?.second?.description.orEmpty().ifBlank { "Select the preview or playing channel for fullscreen" }, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MarsMuted)
+                }
+                TextButton(onClick = onStopPreview) { Text("Stop") }
+            }
+        }
+        Row(Modifier.weight(1f)) {
+            if (categoriesExpanded) {
+                LazyColumn(state = categoryListState, modifier = Modifier.width(180.dp).fillMaxHeight().padding(end = 8.dp)
+                    .onPreviewKeyEvent {
+                        if (it.key == Key.DirectionRight) {
+                            if (it.type == KeyEventType.KeyDown) closeCategories()
+                            true
+                        } else false
+                    }) {
+                    item { CategoryChip("All channels", selectedCategory == null, false,
+                        if (selectedCategory == null) Modifier.focusRequester(selectedCategoryFocus) else Modifier) { selectCategory(null) } }
+                    items(categories, key = { it.key }) { category ->
+                        CategoryChip(category.name, selectedCategory == category.key, isCategoryLocked(category.key),
+                            if (selectedCategory == category.key) Modifier.focusRequester(selectedCategoryFocus) else Modifier) {
+                            if (isCategoryLocked(category.key)) pendingUnlock = category
+                            else selectCategory(category.key)
                         }
                     }
                 }
-                item { Spacer(Modifier.height(28.dp)) }
             }
+            Column(Modifier.weight(1f)) {
+                Row(Modifier.fillMaxWidth().height(24.dp)) {
+                    Text(if (isTelevision) "Left: Categories" else "Channel", Modifier.width(if (isTelevision) 158.dp else 130.dp), color = MarsMuted, style = MaterialTheme.typography.labelSmall)
+                    repeat(4) { index ->
+                        Text(DateTimeFormatter.ofPattern("h:mm a").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(windowStart + index * halfHour)),
+                            Modifier.weight(1f), color = MarsMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                when {
+                    channels.loadState.refresh is LoadState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    channels.loadState.refresh is LoadState.Error -> Column {
+                        Text("Could not load live channels")
+                        TextButton(onClick = { channels.retry() }) { Text("Retry") }
+                    }
+                    channels.itemCount == 0 -> EmptyState("No live channels", "Try another category or refresh this account.")
+                    else -> BoxWithConstraints(Modifier.fillMaxSize()) {
+                        val rowHeight = if (isTelevision) ((maxHeight - 14.dp) / 8).coerceIn(36.dp, 54.dp) else 64.dp
+                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            items(count = channels.itemCount, key = { channels.peek(it)?.key ?: "placeholder-$it" }) { index ->
+                                channels[index]?.let { channel ->
+                                    val programmes by remember(accountId, channel.epgId, windowStart, fullEpgEnabled) {
+                                        programmesSource(channel.epgId, windowStart, windowEnd)
+                                    }.collectAsStateWithLifecycle(emptyList())
+                                    ChannelTimelineRow(
+                                        channel, programmes, windowStart, windowEnd, now,
+                                        channel.key in favouriteKeys, previewRequest?.contentKey == channel.key,
+                                        Modifier.height(rowHeight), if (isTelevision) 158.dp else 130.dp,
+                                        onPlay = { onPlayChannel(channel) },
+                                        onFavourite = { onToggleFavourite(channel.key) },
+                                        onSelect = { programme ->
+                                            if (programme.isLive) onPlayProgramme(channel, programme)
+                                            else details = channel to programme
+                                        },
+                                        onFocus = { programme, requester -> highlighted = channel to programme; lastFocus = requester },
+                                        onChannelFocus = { lastFocus = it },
+                                        onMoveWindow = ::moveWindow,
+                                        channelModifier = if (index == 0) Modifier.focusRequester(firstChannelFocus) else Modifier,
+                                        onOpenCategories = { categoriesExpanded = true },
+                                    )
+                                }
+                            }
+                            if (channels.loadState.append is LoadState.Loading) item { CircularProgressIndicator(Modifier.size(24.dp)) }
+                            if (channels.loadState.append is LoadState.Error) item { TextButton(onClick = { channels.retry() }) { Text("Retry loading channels") } }
+                        }
+                    }
+                }
             }
         }
     }
-
+    details?.let { (channel, programme) ->
+        AlertDialog(onDismissRequest = { details = null }, title = { Text(programme.title) },
+            text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(channel.name)
+                Text("${formatter.format(Instant.ofEpochMilli(programme.startMs))} ? ${formatter.format(Instant.ofEpochMilli(programme.endMs))}")
+                Text(programme.description.ifBlank { "No description available" })
+                TextButton(onClick = { onToggleFavourite(channel.key) }) { Text(if (channel.key in favouriteKeys) "Remove favourite" else "Add favourite") }
+            } },
+            confirmButton = {
+                if (programme.isLive || (programme.isPast && channel.supportsCatchUp)) {
+                    TextButton(onClick = { details = null; onPlayProgramme(channel, programme) }) { Text(if (programme.isLive) "Watch live" else "Watch catch-up") }
+                } else TextButton(onClick = { details = null }) { Text("Close") }
+            },
+            dismissButton = { TextButton(onClick = { details = null; onPlayChannel(channel) }) { Text("Watch channel") } })
+    }
     pendingUnlock?.let { category ->
-        UnlockCategoryDialog(
-            categoryName = category.name,
-            hasPin = profileHasPin,
-            pinMatches = pinMatches,
-            onDismiss = { pendingUnlock = null },
-            onUnlocked = {
-                onUnlockCategory(category.key)
-                selectedCategory = category.key
-                pendingUnlock = null
-            },
-            onOpenSettings = {
-                pendingUnlock = null
-                onOpenSettings()
-            },
-        )
+        UnlockCategoryDialog(category.name, profileHasPin, pinMatches, { pendingUnlock = null }, {
+            onUnlockCategory(category.key); pendingUnlock = null; selectCategory(category.key)
+        }, { pendingUnlock = null; onOpenSettings() })
     }
 }
 
 @Composable
-private fun GuideHeader(
-    categories: List<Category>,
-    selectedCategory: String?,
-    isLocked: (String) -> Boolean,
-    fullEpgEnabled: Boolean,
-    onSelect: (Category?) -> Unit,
-    onEarlier: () -> Unit,
-    onNow: () -> Unit,
-    onLater: () -> Unit,
+private fun CategoryChip(title: String, selected: Boolean, locked: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    FocusSurface(onClick, modifier.fillMaxWidth().padding(bottom = 3.dp), selected) {
+        Text((if (locked) "Locked ? " else "") + title, Modifier.padding(8.dp), maxLines = 2,
+            style = MaterialTheme.typography.labelMedium, color = if (selected) MarsWhite else MarsMuted)
+    }
+}
+
+@Composable
+private fun ChannelTimelineRow(
+    channel: Channel, programmes: List<Programme>, windowStart: Long, windowEnd: Long, now: Long,
+    favourite: Boolean, playing: Boolean, modifier: Modifier, channelWidth: androidx.compose.ui.unit.Dp,
+    onPlay: () -> Unit, onFavourite: () -> Unit, onSelect: (Programme) -> Unit,
+    onFocus: (Programme, FocusRequester) -> Unit, onChannelFocus: (FocusRequester) -> Unit,
+    onMoveWindow: (Int) -> Unit,
+    channelModifier: Modifier = Modifier,
+    onOpenCategories: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().background(MarsMidnight).padding(bottom = 10.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column {
-                Text("Live guide", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-                Text("Select a programme to watch live or replay catch-up", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
+    val channelFocus = remember(channel.key) { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        FocusSurface(onPlay, channelModifier.width(channelWidth).fillMaxHeight().focusRequester(channelFocus)
+            .onPreviewKeyEvent {
+                if (it.key == Key.DirectionLeft) {
+                    if (it.type == KeyEventType.KeyDown) onOpenCategories()
+                    true
+                } else false
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (fullEpgEnabled) AssistChip(onClick = onEarlier, label = { Text("−2h") })
-                AssistChip(onClick = onNow, label = { Text("Now") })
-                if (fullEpgEnabled) AssistChip(onClick = onLater, label = { Text("+2h") })
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            CategoryChip("All channels", selectedCategory == null, false) { onSelect(null) }
-            categories.forEach { category ->
-                CategoryChip(
-                    title = category.name,
-                    selected = selectedCategory == category.key,
-                    locked = isLocked(category.key),
-                    onClick = { onSelect(category) },
-                )
+            .onFocusChanged { if (it.hasFocus) onChannelFocus(channelFocus) }, selected = playing) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(model = channel.logoUrl, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.size(26.dp))
+                Text(channel.name, Modifier.weight(1f).padding(start = 6.dp), maxLines = 2,
+                    overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium, color = MarsWhite)
+                IconButton(onClick = onFavourite, modifier = Modifier.size(30.dp)) {
+                    Icon(if (favourite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                        contentDescription = if (favourite) "Remove favourite" else "Add favourite",
+                        tint = if (favourite) MarsRed else MarsMuted, modifier = Modifier.size(16.dp))
+                }
             }
         }
-    }
-}
-
-@Composable
-private fun CategoryChip(title: String, selected: Boolean, locked: Boolean, onClick: () -> Unit) {
-    FocusSurface(onClick = onClick, selected = selected) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (locked) {
-                Icon(Icons.Default.Lock, contentDescription = "Locked", modifier = Modifier.width(16.dp), tint = MarsMuted)
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(title, maxLines = 1, color = if (selected) MarsWhite else MarsMuted, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun ChannelGuideRow(
-    channel: Channel,
-    programmesSource: (channelEpgId: String, windowStart: Long, windowEnd: Long) -> Flow<List<Programme>>,
-    guideOffsetMs: Long,
-    favourite: Boolean,
-    onPlayChannel: () -> Unit,
-    onPlayProgramme: (Programme) -> Unit,
-    onFavourite: () -> Unit,
-) {
-    val windowStart = remember(guideOffsetMs) { System.currentTimeMillis() + guideOffsetMs - 15 * 60 * 1000L }
-    val windowEnd = windowStart + 4 * 60 * 60 * 1000L
-    val programmes by remember(channel.epgId, windowStart, windowEnd) {
-        programmesSource(channel.epgId, windowStart, windowEnd)
-    }.collectAsStateWithLifecycle(initialValue = emptyList())
-    val visibleProgrammes = programmes.take(10)
-
-    Row(modifier = Modifier.fillMaxWidth().height(104.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        FocusSurface(onClick = onPlayChannel, modifier = Modifier.width(218.dp).fillMaxHeight()) {
-            Row(
-                modifier = Modifier.fillMaxSize().padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    modifier = Modifier.size(54.dp).clip(RoundedCornerShape(9.dp)).background(MarsSurfaceRaised),
-                    contentAlignment = Alignment.Center,
+        BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(6.dp)).background(MarsSurface)) {
+            val timelineWidth = maxWidth
+            val slots = remember(programmes, windowStart, windowEnd) { guideSlots(programmes, windowStart, windowEnd) }
+            slots.forEachIndexed { index, slot ->
+                val programme = slot.programme
+                val requester = remember(channel.key, slot.startMs) { FocusRequester() }
+                val startFraction = (slot.startMs - windowStart).toFloat() / (windowEnd - windowStart)
+                val widthFraction = (slot.endMs - slot.startMs).toFloat() / (windowEnd - windowStart)
+                FocusSurface(
+                    onClick = { if (programme == null) onPlay() else onSelect(programme) },
+                    modifier = Modifier.offset(x = timelineWidth * startFraction).width(timelineWidth * widthFraction).fillMaxHeight()
+                        .padding(end = 2.dp).focusRequester(requester)
+                        .onFocusChanged { if (it.isFocused) { if (programme != null) onFocus(programme, requester) else onChannelFocus(requester) } }
+                        .onPreviewKeyEvent {
+                            if (it.type == KeyEventType.KeyDown && ((it.key == Key.DirectionRight && index == slots.lastIndex) || (it.key == Key.DirectionLeft && index == 0))) {
+                                if (it.key == Key.DirectionRight) {
+                                    onMoveWindow(1)
+                                    scope.launch { androidx.compose.runtime.withFrameNanos { }; channelFocus.requestFocus() }
+                                    true
+                                } else false
+                            } else false
+                        },
+                    selected = programme != null && now in programme.startMs until programme.endMs,
                 ) {
-                    if (channel.logoUrl.isNotBlank()) {
-                        AsyncImage(
-                            model = channel.logoUrl,
-                            contentDescription = channel.name,
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize().padding(5.dp),
-                        )
-                    } else {
-                        Text(channel.name.take(2).uppercase(), color = MarsMuted, fontWeight = FontWeight.Black)
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(channel.name, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                    Text(channel.categoryName, color = MarsMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                }
-                IconButton(onClick = onFavourite, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        imageVector = if (favourite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Favourite",
-                        tint = if (favourite) MarsRed else MarsMuted,
-                    )
+                    Text(programme?.title ?: "No guide data ? Watch live", Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium,
+                        color = if (programme == null) MarsMuted else MarsWhite)
                 }
             }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxHeight().weight(1f).horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (visibleProgrammes.isEmpty()) {
-                FocusSurface(onClick = onPlayChannel, modifier = Modifier.width(280.dp).fillMaxHeight()) {
-                    Row(
-                        modifier = Modifier.fillMaxSize().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.PlayArrow, null, tint = MarsRed)
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text("Watch live", fontWeight = FontWeight.Bold)
-                            Text("Guide data unavailable", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            } else {
-                visibleProgrammes.forEach { programme ->
-                    ProgrammeCard(
-                        programme = programme,
-                        catchUpAvailable = channel.supportsCatchUp && programme.isPast,
-                        onClick = { onPlayProgramme(programme) },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProgrammeCard(programme: Programme, catchUpAvailable: Boolean, onClick: () -> Unit) {
-    val timeFormatter = remember { DateTimeFormatter.ofPattern("h:mm a") }
-    val startText = remember(programme.startMs) {
-        Instant.ofEpochMilli(programme.startMs).atZone(ZoneId.systemDefault()).format(timeFormatter)
-    }
-    val durationMinutes = ((programme.endMs - programme.startMs) / 60_000L).coerceIn(20, 180)
-    val width = (durationMinutes * 3.4).dp.coerceIn(160.dp, 420.dp)
-    val activeColor = if (programme.isLive) MarsSuccess else if (catchUpAvailable) MarsViolet else MarsMuted
-
-    FocusSurface(onClick = onClick, modifier = Modifier.width(width).fillMaxHeight(), selected = programme.isLive) {
-        Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-            Text(programme.title, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(activeColor))
-                Spacer(Modifier.width(6.dp))
-                Text(startText, color = MarsMuted, style = MaterialTheme.typography.labelMedium)
-                if (catchUpAvailable) {
-                    Spacer(Modifier.width(10.dp))
-                    Icon(Icons.Default.Replay, contentDescription = "Catch-up", tint = MarsViolet, modifier = Modifier.size(17.dp))
-                }
+            if (now in windowStart until windowEnd) {
+                Box(Modifier.offset(x = timelineWidth * ((now - windowStart).toFloat() / (windowEnd - windowStart)))
+                    .width(1.dp).fillMaxHeight().background(MarsSuccess))
             }
         }
     }

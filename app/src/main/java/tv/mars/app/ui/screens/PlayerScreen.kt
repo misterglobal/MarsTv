@@ -49,7 +49,12 @@ import tv.mars.app.ui.theme.MarsRed
 import tv.mars.app.ui.theme.MarsWhite
 
 @Composable
-fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs: Long) -> Unit) {
+fun PlayerScreen(
+    request: PlayerRequest,
+    onClose: (positionMs: Long, durationMs: Long) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
     val context = LocalContext.current
     val activity = context as? MainActivity
     val player = remember(request.url) {
@@ -69,7 +74,22 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
         onClose(player.currentPosition.coerceAtLeast(0L), player.duration.coerceAtLeast(0L))
     }
 
-    BackHandler(onBack = ::close)
+    BackHandler(enabled = !compact, onBack = ::close)
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(player, lifecycleOwner) {
+        var resumeOnStart = false
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                resumeOnStart = player.playWhenReady
+                player.pause()
+            } else if (event == androidx.lifecycle.Lifecycle.Event.ON_START && resumeOnStart) {
+                player.play()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     DisposableEffect(player) {
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -108,7 +128,7 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(modifier = modifier.background(Color.Black)) {
         AndroidView(
             factory = { viewContext ->
                 PlayerView(viewContext).apply {
@@ -124,12 +144,19 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
                     keepScreenOn = true
                 }
             },
-            update = { it.player = player },
+            update = {
+                it.player = player
+                it.useController = !compact
+                it.isFocusable = !compact
+                it.descendantFocusability = if (compact) android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS else android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+                if (compact) it.hideController()
+                else if (!it.hasFocus()) it.requestFocus()
+            },
             modifier = Modifier.fillMaxSize(),
         )
 
         AnimatedVisibility(
-            visible = controlsVisible,
+            visible = controlsVisible && !compact,
             modifier = Modifier.align(Alignment.TopStart),
         ) {
             Text(
@@ -142,6 +169,10 @@ fun PlayerScreen(request: PlayerRequest, onClose: (positionMs: Long, durationMs:
         }
 
         errorMessage?.let { message ->
+            if (compact) {
+                Text("Stream unavailable", color = MarsWhite, modifier = Modifier.align(Alignment.Center))
+                return@let
+            }
             Column(
                 modifier = Modifier.align(Alignment.Center).background(MarsMidnight.copy(alpha = 0.94f)).padding(26.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
