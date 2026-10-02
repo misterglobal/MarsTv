@@ -9,6 +9,11 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.core.app.ActivityScenario
@@ -26,6 +31,8 @@ import tv.mars.app.entitlement.EntitlementState
 import java.util.Date
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class HomeClockTest {
     @Test fun homeClockHasSameBottomRightPositionForFreeAndProInBothLayouts() {
@@ -39,20 +46,26 @@ class HomeClockTest {
                         EntitlementState.Pro("test", emptySet(), "test", "test", 1, Instant.MAX),
                     )
                     for (tier in tiers) {
+                        val rendered = CountDownLatch(1)
                         scenario.onActivity { activity ->
                             val viewModel = ViewModelProvider(activity)[MarsTvViewModel::class.java]
                             activity.setContent {
                                 MarsTvTheme {
                                     CompositionLocalProvider(LocalLayoutDirection provides direction) {
-                                        HomeShell(
-                                            state = MarsUiState(destination = MainDestination.MOVIES, entitlementState = tier),
-                                            viewModel = viewModel,
-                                            isTelevision = television,
-                                        )
+                                        key(television, direction, tier) {
+                                            Box(Modifier.fillMaxSize().onGloballyPositioned { rendered.countDown() }) {
+                                                HomeShell(
+                                                    state = MarsUiState(destination = MainDestination.MOVIES, entitlementState = tier),
+                                                    viewModel = viewModel,
+                                                    isTelevision = television,
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
+                        assertTrue("Home layout must finish rendering", rendered.await(10, TimeUnit.SECONDS))
                         instrumentation.waitForIdleSync()
                         scenario.onActivity { activity ->
                             val clock = requireNotNull(findClock(activity.window.decorView))
