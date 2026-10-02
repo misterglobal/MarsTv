@@ -49,6 +49,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.foundation.focusGroup
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -64,6 +65,7 @@ import tv.mars.app.ui.components.FocusSurface
 import tv.mars.app.ui.components.RemoteNavigation
 import tv.mars.app.ui.components.LoadingOverlay
 import tv.mars.app.ui.components.MarsLogo
+import tv.mars.app.ui.components.HomeClock
 import tv.mars.app.ui.screens.AccountSetupScreen
 import tv.mars.app.ui.screens.LibraryScreen
 import tv.mars.app.ui.screens.LiveGuideScreen
@@ -190,7 +192,7 @@ private fun SplashScreen() {
 }
 
 @Composable
-private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevision: Boolean) {
+internal fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevision: Boolean) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
         val railLayout = isTelevision || maxWidth >= 760.dp
         Column(Modifier.fillMaxSize()) {
@@ -209,7 +211,7 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
             if (state.errorMessage != null) Spacer(Modifier.height(8.dp))
 
             if (railLayout) {
-                Row(modifier = Modifier.fillMaxSize()) {
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     SideNavigation(
                         selected = state.destination,
                         onSelect = viewModel::setDestination,
@@ -230,6 +232,9 @@ private fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevisi
                     modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
                 )
                 BottomNavigation(selected = state.destination, onSelect = viewModel::setDestination)
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
+                HomeClock(Modifier.align(AbsoluteAlignment.BottomRight))
             }
         }
     }
