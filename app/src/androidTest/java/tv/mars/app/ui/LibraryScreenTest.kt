@@ -77,10 +77,12 @@ class LibraryScreenTest {
             saveScreenshot("library-tv-populated.png")
 
             var entrySteps = 0
-            while (!focusedHasLabel(channels.first().name) && entrySteps < 6) {
+            val firstRemove = "Remove favourite: ${channels.first().name}"
+            while (!focusedHasAnyLabel(channels.first().name, firstRemove) && entrySteps < 6) {
                 sendRemoteKey(KeyEvent.KEYCODE_DPAD_DOWN)
                 entrySteps++
             }
+            if (focusedHasLabel(firstRemove)) sendRemoteKey(KeyEvent.KEYCODE_DPAD_LEFT)
             awaitFocusedLabel(channels.first().name)
             for (channel in channels.subList(1, 25)) {
                 sendRemoteKey(KeyEvent.KEYCODE_DPAD_DOWN)
@@ -410,6 +412,8 @@ class LibraryScreenTest {
             (0 until node.childCount).any { index -> node.getChild(index)?.let(::containsLabel) == true }
         return containsLabel(focused)
     }
+
+    private fun focusedHasAnyLabel(vararg labels: String): Boolean = labels.any(::focusedHasLabel)
 
     private fun awaitFocusedLabel(label: String) {
         val deadline = SystemClock.elapsedRealtime() + 5_000
