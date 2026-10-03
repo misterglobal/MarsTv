@@ -82,7 +82,7 @@ jobs:
           api-level: 35
           arch: x86_64
           disable-animations: true
-          script: bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=tv.mars.app.ui.HomeClockTest,tv.mars.app.ui.RemoteSelectionTest
+          script: bash ./gradlew --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=tv.mars.app.ui.HomeClockTest,tv.mars.app.ui.RemoteSelectionTest,tv.mars.app.ui.LibraryScreenTest
       - name: Save device-test reports
         if: always()
         uses: actions/upload-artifact@v4
