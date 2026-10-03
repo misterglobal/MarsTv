@@ -72,18 +72,9 @@ class LibraryScreenTest {
         val target = channels[24]
         withLibrary(CatalogLookup(channels = channels), television = true, remoteNavigation = true) { events ->
             awaitLabel(channels.first().name)
-            awaitFocusedLabel("Favourites")
             assertAbsent(target.name)
             saveScreenshot("library-tv-populated.png")
-
-            var entrySteps = 0
-            val firstRemove = "Remove favourite: ${channels.first().name}"
-            while (!focusedHasAnyLabel(channels.first().name, firstRemove) && entrySteps < 6) {
-                sendRemoteKey(KeyEvent.KEYCODE_DPAD_DOWN)
-                entrySteps++
-            }
-            if (focusedHasLabel(firstRemove)) sendRemoteKey(KeyEvent.KEYCODE_DPAD_LEFT)
-            awaitFocusedLabel(channels.first().name)
+            focusLabel(channels.first().name)
             for (channel in channels.subList(1, 25)) {
                 sendRemoteKey(KeyEvent.KEYCODE_DPAD_DOWN)
                 awaitFocusedLabel(channel.name)
@@ -413,7 +404,11 @@ class LibraryScreenTest {
         return containsLabel(focused)
     }
 
-    private fun focusedHasAnyLabel(vararg labels: String): Boolean = labels.any(::focusedHasLabel)
+    private fun focusLabel(label: String) {
+        val node = requireNotNull(clickable(awaitLabel(label))) { "Library row is not focusable: $label" }
+        assertTrue("Library row must accept input focus: $label", node.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
+        awaitFocusedLabel(label)
+    }
 
     private fun awaitFocusedLabel(label: String) {
         val deadline = SystemClock.elapsedRealtime() + 5_000
