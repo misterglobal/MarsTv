@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import tv.mars.app.core.MainDestination
 import tv.mars.app.core.ContentKind
@@ -195,7 +196,8 @@ private fun SplashScreen() {
 internal fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevision: Boolean) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
         val railLayout = isTelevision || maxWidth >= 760.dp
-        Column(Modifier.fillMaxSize()) {
+        val clockHeight = with(LocalDensity.current) { 24.sp.toDp() } + 12.dp
+        Column(Modifier.fillMaxSize().padding(bottom = clockHeight)) {
             HomeTopBar(
                 accountName = state.activeAccount?.name.orEmpty(),
                 profileName = state.activeProfile?.name.orEmpty(),
@@ -211,7 +213,7 @@ internal fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevis
             if (state.errorMessage != null) Spacer(Modifier.height(8.dp))
 
             if (railLayout) {
-                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                Row(modifier = Modifier.fillMaxSize()) {
                     SideNavigation(
                         selected = state.destination,
                         onSelect = viewModel::setDestination,
@@ -233,9 +235,9 @@ internal fun HomeShell(state: MarsUiState, viewModel: MarsTvViewModel, isTelevis
                 )
                 BottomNavigation(selected = state.destination, onSelect = viewModel::setDestination)
             }
-            Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
-                HomeClock(Modifier.align(AbsoluteAlignment.BottomRight))
-            }
+        }
+        Box(Modifier.align(AbsoluteAlignment.BottomRight).fillMaxWidth().height(clockHeight).padding(horizontal = 18.dp, vertical = 6.dp)) {
+            HomeClock(Modifier.align(AbsoluteAlignment.BottomRight))
         }
     }
 }
