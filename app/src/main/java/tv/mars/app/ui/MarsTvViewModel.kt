@@ -219,7 +219,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
             var accountPublished = false
             runCatching {
-                repository.refreshCatalog(account) { previewRevision ->
+                repository.refreshCatalog(account, onCatalogReady = { previewRevision ->
                     val publishAccount = !accountPublished
                     if (publishAccount) {
                         accountPublished = true
@@ -238,7 +238,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     }
                     if (publishAccount) stateStore.addAccount(account)
-                }
+                })
             }
                 .onSuccess { revision ->
                     logCatalogCompleted()
@@ -292,9 +292,10 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.update { it.copy(errorMessage = null, selectedSeries = null) }
 
             if (!force) {
-                val dayMs = 24 * 60 * 60 * 1000L
                 val roomLoadedAt = repository.catalogLoadedAt(account.id)
-                if (roomLoadedAt != null && System.currentTimeMillis() - roomLoadedAt < dayMs) {
+                val now = System.currentTimeMillis()
+                val lastRefreshAttemptedAt = _uiState.value.local.catalogRefreshAttemptedAtByAccount[account.id]
+                if (roomLoadedAt != null && !shouldAutomaticallyRefreshCatalog(roomLoadedAt, lastRefreshAttemptedAt, now)) {
                     Log.i(BENCHMARK_TAG, "catalog_cache_hit source=room")
                     _uiState.update {
                         it.copy(
@@ -308,7 +309,7 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (roomLoadedAt == null) {
                     val persisted = catalogPersistence.load(account.id)
-                    if (persisted != null && System.currentTimeMillis() - persisted.loadedAt < dayMs) {
+                    if (persisted != null && !shouldAutomaticallyRefreshCatalog(persisted.loadedAt, lastRefreshAttemptedAt, now)) {
                         runCatching { repository.seedRoomFromLegacyCache(persisted) }
                             .onFailure {
                                 _uiState.update { state ->
@@ -333,15 +334,20 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
 
             Log.i(BENCHMARK_TAG, "catalog_cache_miss refresh=true")
             val hasUsableCatalog = repository.catalogLoadedAt(account.id) != null
+            if (!force && hasUsableCatalog) stateStore.recordCatalogRefreshAttempt(account.id, System.currentTimeMillis())
             _uiState.update { it.copy(isLoading = !hasUsableCatalog, isCatalogLoading = true, errorMessage = null) }
 
             runCatching {
-                repository.refreshCatalog(account, onCatalogReady = { revision ->
-                    _uiState.update {
-                        it.copy(loadedCatalogAccountId = account.id, catalogRevision = revision,
-                            isLoading = false, isCatalogLoading = false)
-                    }
-                })
+                repository.refreshCatalog(
+                    account,
+                    onCatalogReady = { revision ->
+                        _uiState.update {
+                            it.copy(loadedCatalogAccountId = account.id, catalogRevision = revision,
+                                isLoading = false, isCatalogLoading = false)
+                        }
+                    },
+                    onGuideRefreshCompleted = { stateStore.clearCatalogRefreshAttempt(account.id) },
+                )
             }
                 .onSuccess { revision ->
                     logCatalogCompleted()
@@ -738,6 +744,18 @@ class MarsTvViewModel(application: Application) : AndroidViewModel(application) 
         const val BENCHMARK_TAG = "MarsCatalogMetrics"
         const val ACTIVATION_POLL_INTERVAL_MS = 5_000L
     }
+}
+
+internal const val AUTOMATIC_CATALOG_REFRESH_INTERVAL_MS = 3L * 24 * 60 * 60 * 1000
+internal const val CATALOG_REFRESH_RETRY_COOLDOWN_MS = 6L * 60 * 60 * 1000
+
+internal fun shouldAutomaticallyRefreshCatalog(loadedAt: Long, lastAttemptedAt: Long?, now: Long): Boolean {
+    if (loadedAt <= 0L || now < loadedAt) return true
+    if (lastAttemptedAt != null) {
+        if (lastAttemptedAt <= 0L || now < lastAttemptedAt) return true
+        return now - lastAttemptedAt >= CATALOG_REFRESH_RETRY_COOLDOWN_MS
+    }
+    return now - loadedAt >= AUTOMATIC_CATALOG_REFRESH_INTERVAL_MS
 }
 
 internal fun currentAndNextProgrammes(programmes: List<Programme>, nowMs: Long = System.currentTimeMillis()): List<Programme> {
