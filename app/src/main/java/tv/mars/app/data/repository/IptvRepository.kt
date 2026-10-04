@@ -48,9 +48,11 @@ class IptvRepository(
         account: IptvAccount,
         onCatalogReady: suspend (Long) -> Unit = {},
         onInitialCatalogAvailable: suspend (Long) -> Unit = {},
+        onGuideRefreshCompleted: suspend () -> Unit = {},
     ): Long = when (account.sourceType) {
-        SourceType.PRIVATE_XTREAM, SourceType.XTREAM -> loadXtream(account, onInitialCatalogAvailable, onCatalogReady)
-        SourceType.M3U -> loadM3u(account, onInitialCatalogAvailable, onCatalogReady)
+        SourceType.PRIVATE_XTREAM, SourceType.XTREAM ->
+            loadXtream(account, onInitialCatalogAvailable, onCatalogReady, onGuideRefreshCompleted)
+        SourceType.M3U -> loadM3u(account, onInitialCatalogAvailable, onCatalogReady, onGuideRefreshCompleted)
     }
 
     suspend fun catalogLoadedAt(accountId: String): Long? = roomCatalog.catalogLoadedAt(accountId)
@@ -179,10 +181,13 @@ class IptvRepository(
         account: IptvAccount,
         onInitialCatalogAvailable: suspend (Long) -> Unit,
         onCatalogReady: suspend (Long) -> Unit,
+        onGuideRefreshCompleted: suspend () -> Unit,
     ): Long {
         // A refresh must not retain the previous episode graph while a new one is built.
         account.xtreamAccountFromM3u()?.let { xtreamAccount ->
-            val xtreamResult = runCatching { loadXtream(xtreamAccount, onInitialCatalogAvailable, onCatalogReady) }
+            val xtreamResult = runCatching {
+                loadXtream(xtreamAccount, onInitialCatalogAvailable, onCatalogReady, onGuideRefreshCompleted)
+            }
             if (xtreamResult.isSuccess) {
                 return xtreamResult.getOrThrow()
             }
@@ -208,18 +213,21 @@ class IptvRepository(
         )
         onCatalogReady(roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis())
         if (result.epgUrl.isNotBlank()) {
-            runCatching {
-                val resolvedEpg = resolve(account.m3uUrl, result.epgUrl)
-                val references = roomCatalog.channelReferences(account.id)
-                importProgrammes(account.id) { write ->
-                    network.getStream(resolvedEpg) { stream ->
-                        xmlTv.parseStreamingReferences(stream, references, emit = write)
+            val guideUpdated = attemptGuideRefresh(
+                refresh = {
+                    val resolvedEpg = resolve(account.m3uUrl, result.epgUrl)
+                    val references = roomCatalog.channelReferences(account.id)
+                    importProgrammes(account.id) { write ->
+                        network.getStream(resolvedEpg) { stream ->
+                            xmlTv.parseStreamingReferences(stream, references, emit = write)
+                        }
                     }
-                }
-            }.onFailure {
-                if (it is CancellationException) throw it
-                Log.w(TAG, "Could not refresh the M3U programme guide", it)
-            }
+                },
+                onFailure = { Log.w(TAG, "Could not refresh the M3U programme guide", it) },
+            )
+            if (guideUpdated) onGuideRefreshCompleted()
+        } else {
+            onGuideRefreshCompleted()
         }
         return roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis()
     }
@@ -228,6 +236,7 @@ class IptvRepository(
         account: IptvAccount,
         onInitialCatalogAvailable: suspend (Long) -> Unit,
         onCatalogReady: suspend (Long) -> Unit,
+        onGuideRefreshCompleted: suspend () -> Unit,
     ): Long {
         val publishEarly = !roomCatalog.hasCatalog(account.id)
         val stats = xtreamRoomImporter.import(
@@ -241,13 +250,14 @@ class IptvRepository(
                 "Series: ${stats.seriesEntries}",
         )
         onCatalogReady(roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis())
-        runCatching {
-            val references = roomCatalog.channelReferences(account.id)
-            importProgrammes(account.id) { write -> xtream.streamProgrammeGuide(account, references, write) }
-        }.onFailure {
-            if (it is CancellationException) throw it
-            Log.w(TAG, "Could not refresh the Xtream programme guide", it)
-        }
+        val guideUpdated = attemptGuideRefresh(
+            refresh = {
+                val references = roomCatalog.channelReferences(account.id)
+                importProgrammes(account.id) { write -> xtream.streamProgrammeGuide(account, references, write) }
+            },
+            onFailure = { Log.w(TAG, "Could not refresh the Xtream programme guide", it) },
+        )
+        if (guideUpdated) onGuideRefreshCompleted()
         return roomCatalog.catalogLoadedAt(account.id) ?: System.currentTimeMillis()
     }
 
@@ -268,6 +278,18 @@ class IptvRepository(
     private fun resolve(base: String, candidate: String): String = runCatching {
         URI(base).resolve(candidate).toString()
     }.getOrDefault(candidate)
+}
+
+internal suspend fun attemptGuideRefresh(
+    refresh: suspend () -> Unit,
+    onFailure: (Throwable) -> Unit = {},
+): Boolean = try {
+    refresh()
+    true
+} catch (error: Throwable) {
+    if (error is CancellationException) throw error
+    onFailure(error)
+    false
 }
 
 internal fun IptvAccount.xtreamAccountFromM3u(): IptvAccount? {
