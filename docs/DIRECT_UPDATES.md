@@ -48,6 +48,10 @@ Copy these outputs into a separate version-specific release archive before the n
 
 ## Publish through cPanel
 
+The preferred path is the manual **Android production release** GitHub Actions workflow documented in `docs/features/production-release-pipeline.md`. It separates signing from SSH publication with two protected-environment approvals, uploads temporary files, verifies the remote checksum, updates `.env` atomically, and publishes the signed manifest last. Merging code never starts that workflow.
+
+The manual procedure below remains the break-glass reference. Do not run it in parallel with the automated workflow.
+
 1. Deploy `public/releases.php` and the changed `public/.htaccess` (plus `router.php` if using PHP's local server).
 2. Upload the APK to the site's public `downloads/` directory using the filename in the signed manifest. Check its uploaded SHA-256 against the generator output before offering it.
 3. Create `storage/releases/` inside the backend, outside the public document root. Upload the `.jws` under a temporary name, then rename it to `direct-stable.jws` as the final publication step. No release signing secret belongs on the server.

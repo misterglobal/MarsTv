@@ -1,0 +1,281 @@
+name: Android production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      minimum_supported_version_code:
+        description: Oldest version code supported by this release
+        required: true
+        default: 1
+        type: number
+      priority:
+        description: Update priority shown by MarsTV
+        required: true
+        default: recommended
+        type: choice
+        options:
+          - optional
+          - recommended
+          - critical
+      release_notes:
+        description: Release notes; separate multiple items with new lines
+        required: true
+        type: string
+      confirmation:
+        description: Type PUBLISH MARSTV to continue
+        required: true
+        type: string
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/android-production-release.yml
+      - docs/features/production-release-pipeline.md
+      - scripts/publish-production-release.sh
+      - scripts/remote-publish-release.sh
+      - tools/package_release.py
+      - tools/release_manifest.py
+      - tools/release-requirements.txt
+      - tools/test_package_release.py
+      - tools/test_remote_publish_release.py
+      - tools/test_release_manifest.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-production-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/release-requirements.txt
+      - name: Install pinned release tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tools/release-requirements.txt
+      - name: Validate release tooling
+        run: |
+          python -m unittest discover -s tools -p 'test_*.py'
+          bash -n scripts/publish-production-release.sh scripts/remote-publish-release.sh
+      - name: Validate manual release request
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'Production releases must run from main.' >&2; exit 1; }
+          [[ "$CONFIRMATION" == 'PUBLISH MARSTV' ]] || { echo 'Release confirmation did not match.' >&2; exit 1; }
+
+  prepare-release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate-pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment:
+      name: production-signing
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/release-requirements.txt
+      - name: Install pinned release tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tools/release-requirements.txt
+      - name: Check signing configuration
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM: ${{ secrets.MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM }}
+          MARSTV_MANIFEST_PRIVATE_KEY_PEM: ${{ secrets.MARSTV_MANIFEST_PRIVATE_KEY_PEM }}
+          MARSTV_PRIVATE_PORTAL_URL: ${{ secrets.MARSTV_PRIVATE_PORTAL_URL }}
+          MARSTV_PRODUCTION_CERT_SHA256: ${{ secrets.MARSTV_PRODUCTION_CERT_SHA256 }}
+        run: |
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM MARSTV_MANIFEST_PRIVATE_KEY_PEM MARSTV_PRIVATE_PORTAL_URL MARSTV_PRODUCTION_CERT_SHA256; do
+            [[ -n "${!name:-}" ]] || { echo "Missing production-signing secret: $name" >&2; exit 1; }
+          done
+      - name: Materialize ephemeral signing files
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM: ${{ secrets.MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM }}
+          MARSTV_MANIFEST_PRIVATE_KEY_PEM: ${{ secrets.MARSTV_MANIFEST_PRIVATE_KEY_PEM }}
+          MARSTV_PRIVATE_PORTAL_URL: ${{ secrets.MARSTV_PRIVATE_PORTAL_URL }}
+        run: |
+          set +x
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/marstv-release.keystore"
+          printf '%s\n' "$MARSTV_MANIFEST_PRIVATE_KEY_PEM" > "$RUNNER_TEMP/release-private.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def escape(value):
+              return (value.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '')
+                      .replace('=', '\\=').replace(':', '\\:'))
+
+          values = {
+              'storeFile': os.path.join(os.environ['RUNNER_TEMP'], 'marstv-release.keystore'),
+              'storePassword': os.environ['ANDROID_KEYSTORE_PASSWORD'],
+              'keyAlias': os.environ['ANDROID_KEY_ALIAS'],
+              'keyPassword': os.environ['ANDROID_KEY_PASSWORD'],
+          }
+          Path('keystore.properties').write_text(
+              ''.join(f'{key}={escape(value)}\n' for key, value in values.items()),
+              encoding='utf-8',
+          )
+          Path('providers.properties').write_text(
+              ''.join((
+                  f"MARSTV_PRIVATE_PORTAL_URL={escape(os.environ['MARSTV_PRIVATE_PORTAL_URL'])}\n",
+                  f"MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM={escape(os.environ['MARSTV_ENTITLEMENT_PUBLIC_KEY_PEM'])}\n",
+              )),
+              encoding='utf-8',
+          )
+          PY
+          chmod 600 "$RUNNER_TEMP/marstv-release.keystore" "$RUNNER_TEMP/release-private.pem" keystore.properties providers.properties
+      - name: Build and validate signed release
+        run: bash ./gradlew --no-daemon --continue :app:assembleRelease :app:testDebugUnitTest :app:lintRelease
+      - name: Verify current production release identity
+        env:
+          MARSTV_PRODUCTION_CERT_SHA256: ${{ secrets.MARSTV_PRODUCTION_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          current_manifest="$RUNNER_TEMP/current-direct-stable.jws"
+          curl --fail --silent --show-error --max-time 30 \
+            -H 'Cache-Control: no-cache' \
+            https://marstv.online/api/v1/releases/direct-stable \
+            --output "$current_manifest"
+          mapfile -t current_release < <(python tools/package_release.py inspect-manifest \
+            --manifest "$current_manifest" \
+            --public-key app/update-public-key.txt \
+            --key-id release-2026-01)
+          [[ ${#current_release[@]} -eq 2 ]] || { echo 'Current production manifest is incomplete.' >&2; exit 1; }
+          expected_certificate="${MARSTV_PRODUCTION_CERT_SHA256,,}"
+          [[ "$expected_certificate" =~ ^[a-f0-9]{64}$ ]] || { echo 'Pinned production certificate digest is invalid.' >&2; exit 1; }
+          [[ "${current_release[1]}" == "$expected_certificate" ]] || { echo 'Published manifest does not use the pinned production signer.' >&2; exit 1; }
+          echo "CURRENT_PRODUCTION_VERSION_CODE=${current_release[0]}" >> "$GITHUB_ENV"
+      - name: Sign update manifest and create release bundle
+        env:
+          MINIMUM_SUPPORTED_VERSION_CODE: ${{ inputs.minimum_supported_version_code }}
+          PRIORITY: ${{ inputs.priority }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          MARSTV_PRODUCTION_CERT_SHA256: ${{ secrets.MARSTV_PRODUCTION_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          version_name="$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | sed -n "s/^package:.*versionName='\([^']*\)'.*$/\1/p")"
+          [[ "$version_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || { echo 'Unsafe or missing versionName.' >&2; exit 1; }
+          mkdir -p .artifacts
+          printf '%s\n' "$RELEASE_NOTES" > "$RUNNER_TEMP/release-notes.txt"
+          [[ -s "$RUNNER_TEMP/release-notes.txt" ]] || { echo 'Release notes are required.' >&2; exit 1; }
+          python tools/release_manifest.py sign \
+            --apk "$apk" \
+            --build-tools "$ANDROID_HOME/build-tools/36.0.0" \
+            --java java \
+            --private-key "$RUNNER_TEMP/release-private.pem" \
+            --url "https://marstv.online/downloads/MarsTV-$version_name.apk" \
+            --notes "$RUNNER_TEMP/release-notes.txt" \
+            --previous-version-code "$CURRENT_PRODUCTION_VERSION_CODE" \
+            --minimum-supported-version-code "$MINIMUM_SUPPORTED_VERSION_CODE" \
+            --priority "$PRIORITY" \
+            --output .artifacts/direct-stable.jws
+          python tools/package_release.py create \
+            --apk "$apk" \
+            --manifest .artifacts/direct-stable.jws \
+            --metadata .artifacts/direct-stable.json \
+            --public-key app/update-public-key.txt \
+            --key-id release-2026-01 \
+            --expected-certificate-sha256 "${MARSTV_PRODUCTION_CERT_SHA256,,}" \
+            --mapping app/build/outputs/mapping/release/mapping.txt \
+            --native-symbols app/build/outputs/native-debug-symbols/release/native-debug-symbols.zip \
+            --output .artifacts/release-bundle
+          python tools/package_release.py verify \
+            --bundle .artifacts/release-bundle \
+            --public-key app/update-public-key.txt \
+            --key-id release-2026-01 \
+            --expected-certificate-sha256 "${MARSTV_PRODUCTION_CERT_SHA256,,}"
+      - name: Remove signing material
+        if: always()
+        run: rm -f keystore.properties providers.properties "$RUNNER_TEMP/marstv-release.keystore" "$RUNNER_TEMP/release-private.pem" "$RUNNER_TEMP/release-notes.txt"
+      - name: Save signed release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: marstv-production-release-${{ github.run_number }}
+          path: .artifacts/release-bundle/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production-publish
+      url: https://marstv.online/downloads/
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/release-requirements.txt
+      - name: Install pinned release tooling
+        run: python -m pip install --disable-pip-version-check --require-hashes -r tools/release-requirements.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: marstv-production-release-${{ github.run_number }}
+          path: release-bundle
+      - name: Check publishing configuration
+        env:
+          MARSTV_SSH_HOST: ${{ secrets.MARSTV_SSH_HOST }}
+          MARSTV_SSH_USER: ${{ secrets.MARSTV_SSH_USER }}
+          MARSTV_SSH_PORT: ${{ secrets.MARSTV_SSH_PORT }}
+          MARSTV_SSH_PRIVATE_KEY: ${{ secrets.MARSTV_SSH_PRIVATE_KEY }}
+          MARSTV_SSH_KNOWN_HOSTS: ${{ secrets.MARSTV_SSH_KNOWN_HOSTS }}
+        run: |
+          for name in MARSTV_SSH_HOST MARSTV_SSH_USER MARSTV_SSH_PORT MARSTV_SSH_PRIVATE_KEY MARSTV_SSH_KNOWN_HOSTS; do
+            [[ -n "${!name:-}" ]] || { echo "Missing production-publish secret: $name" >&2; exit 1; }
+          done
+      - name: Materialize ephemeral SSH files
+        env:
+          MARSTV_SSH_PRIVATE_KEY: ${{ secrets.MARSTV_SSH_PRIVATE_KEY }}
+          MARSTV_SSH_KNOWN_HOSTS: ${{ secrets.MARSTV_SSH_KNOWN_HOSTS }}
+        run: |
+          set +x
+          printf '%s\n' "$MARSTV_SSH_PRIVATE_KEY" > "$RUNNER_TEMP/marstv-ssh-key"
+          printf '%s\n' "$MARSTV_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/marstv-known-hosts"
+          chmod 600 "$RUNNER_TEMP/marstv-ssh-key" "$RUNNER_TEMP/marstv-known-hosts"
+      - name: Publish through approval-gated SSH
+        env:
+          MARSTV_SSH_HOST: ${{ secrets.MARSTV_SSH_HOST }}
+          MARSTV_SSH_USER: ${{ secrets.MARSTV_SSH_USER }}
+          MARSTV_SSH_PORT: ${{ secrets.MARSTV_SSH_PORT }}
+          MARSTV_SSH_PRIVATE_KEY_FILE: ${{ runner.temp }}/marstv-ssh-key
+          MARSTV_SSH_KNOWN_HOSTS_FILE: ${{ runner.temp }}/marstv-known-hosts
+        run: bash scripts/publish-production-release.sh release-bundle
+      - name: Remove SSH material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/marstv-ssh-key" "$RUNNER_TEMP/marstv-known-hosts"
