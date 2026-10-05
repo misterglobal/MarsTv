@@ -62,7 +62,7 @@ function config(string $key): mixed
         'transfer_code_pepper' => env_value('MARSTV_TRANSFER_CODE_PEPPER'),
         'price_label' => env_value('MARSTV_PRICE_LABEL', 'US $12.99 one time'),
         'apk_url' => env_value('MARSTV_APK_URL'),
-        'apk_version' => env_value('MARSTV_APK_VERSION', 'Coming soon'),
+        'apk_version' => env_value('MARSTV_APK_VERSION', ''),
         'apk_sha256' => env_value('MARSTV_APK_SHA256'),
         'environment' => env_value('MARSTV_ENV', 'production'),
         'db_dsn' => env_value('MARSTV_DB_DSN'),

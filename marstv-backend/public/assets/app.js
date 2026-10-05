@@ -265,24 +265,23 @@
       ACTIVATION_EXPIRED: 'This code has expired. Generate a new one in MarsTV.',
       ACTIVATION_REDEEMED: 'This activation session was already opened in another browser. Generate a new code in MarsTV.',
       ACTIVATION_RATE_LIMITED: `Too many attempts. Try again${reason?.retryAfter ? ` in ${reason.retryAfter} seconds` : ' shortly'}.`,
-      CHECKOUT_DISABLED: 'Purchases are not available yet. Please check back after the Pro launch.',
-      CHECKOUT_PRODUCT_ID_MISSING: 'Checkout configuration is missing the Freemius product ID.',
-      CHECKOUT_PLAN_ID_MISSING: 'Checkout configuration is missing the Freemius plan ID.',
-      CHECKOUT_PUBLIC_KEY_MISSING: 'Checkout configuration is missing the Freemius public key.',
-      CHECKOUT_SECRET_KEY_MISSING: 'Checkout configuration is missing the Freemius secret key.',
-      MALFORMED_API_RESPONSE: 'The activation service returned an unreadable response. Please try again.',
+      CHECKOUT_DISABLED: 'Purchases are currently unavailable. Please try again later or contact support.',
+      CHECKOUT_PRODUCT_ID_MISSING: 'Checkout is temporarily unavailable. Please try again later or contact support.',
+      CHECKOUT_PLAN_ID_MISSING: 'Checkout is temporarily unavailable. Please try again later or contact support.',
+      CHECKOUT_PUBLIC_KEY_MISSING: 'Checkout is temporarily unavailable. Please try again later or contact support.',
+      CHECKOUT_SECRET_KEY_MISSING: 'Checkout is temporarily unavailable. Please try again later or contact support.',
+      MALFORMED_API_RESPONSE: 'We could not complete activation. Please try again or contact support.',
       LEGAL_ACCEPTANCE_REQUIRED: 'Accept the legal-use terms before opening checkout.',
       PURCHASE_ALREADY_CLAIMED: 'This purchase is already linked to another activation. Contact support before paying again.',
       CHECKOUT_LOAD_FAILED: 'Secure checkout could not load. Check your connection or content blocker and try again.',
-      INVALID_CHECKOUT_CONFIGURATION: 'Checkout is temporarily unavailable. No payment was taken.',
-      INVALID_PURCHASE_RESPONSE: 'Payment completed, but automatic linking was interrupted. Keep your Freemius receipt and contact support.',
-      INVALID_CHECKOUT_URL: 'The checkout provider returned an invalid address. No payment was taken.',
+      INVALID_CHECKOUT_CONFIGURATION: 'Checkout could not open. Please try again later or contact support.',
+      INVALID_PURCHASE_RESPONSE: 'We could not confirm that your payment was linked to this device. If you received a receipt, contact support before paying again.',
+      INVALID_CHECKOUT_URL: 'Checkout could not open. Please try again later or contact support.',
       SERVICE_TEMPORARILY_UNAVAILABLE: 'The activation service could not be reached. Your free player is unaffected; try again shortly.'
     };
     const message = messages[reason?.code] || 'We could not verify this activation session. Generate a new code in MarsTV and try again.';
     const reference = reason?.reference ? ` Reference: ${reason.reference}.` : '';
-    const diagnostic = reason?.diagnostic ? ` Diagnostic: ${reason.diagnostic}.` : '';
-    return `${message}${reference}${diagnostic}`;
+    return `${message}${reference}`;
   }
 
   function showStep(number) {

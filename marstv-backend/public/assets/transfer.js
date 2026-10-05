@@ -11,7 +11,7 @@
   let csrf = '';
   const errors = {
     INVALID_REQUEST: 'Check the email, order number and codes you entered.',
-    TRANSFER_UNAVAILABLE: 'Online transfers are not available yet. Please contact support.',
+    TRANSFER_UNAVAILABLE: 'Online transfers are currently unavailable. Please contact support.',
     TRANSFER_RATE_LIMITED: 'Too many attempts. Please wait before trying again, or contact support.',
     TRANSFER_CODE_INVALID: 'That code is incorrect. Check the latest email and try again.',
     TRANSFER_SESSION_EXPIRED: 'This verification session has expired or reached its attempt limit. Please start again.',

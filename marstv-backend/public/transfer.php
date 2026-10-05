@@ -18,7 +18,7 @@ if (!function_exists('config')) { http_response_code(404); exit; }
       <p id="order-help" class="fineprint">Use the order number from your purchase receipt. Do not enter your licence key.</p>
       <label for="transfer-activation">New device activation code</label>
       <input id="transfer-activation" name="activationCode" autocomplete="off" placeholder="ABCD-EFGH" maxlength="9" required aria-describedby="activation-help">
-      <p id="activation-help" class="fineprint">Open the Pro activation screen in MarsTV on the new device and keep it open. Enter its short-lived activation code here.</p>
+      <p id="activation-help" class="fineprint">Open the Pro activation screen in MarsTV on the new device and keep it open. Enter the activation code shown on that device.</p>
       <button class="button primary" type="submit">Send verification code</button>
     </form>
     <form id="transfer-verify" hidden>
@@ -43,7 +43,7 @@ if (!function_exists('config')) { http_response_code(404); exit; }
     <a href="/transfer" id="transfer-restart" hidden>Start again with a fresh activation code</a>
   </div>
   <?php else: ?>
-  <div class="transfer-card"><h2>Transfer with support</h2><p>Email support with your receipt email or order number and the new public Device ID shown in MarsTV. We will verify purchase ownership before moving Pro. Email verification for self-service transfers is not available yet.</p></div>
+  <div class="transfer-card"><h2>Transfer with support</h2><p>Email support with your receipt email or order number and the new public Device ID shown in MarsTV. We will verify purchase ownership before moving Pro. Online transfers are currently unavailable; support can help you transfer Pro.</p></div>
   <?php endif; ?>
   <p>Lost access to your receipt email, or need help? <a href="mailto:<?= e((string) config('support_email')) ?>">Contact support</a>. Initial response target: within 2 business days. Never email your licence key or verification code.</p>
 </section>
