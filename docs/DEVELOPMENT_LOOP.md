@@ -18,6 +18,12 @@ Marcel checks the APK on TV/mobile, verifies acceptance criteria, and reviews th
 
 Repository protection is a separate administrator setting: require PR review and the workflow checks for main if desired. This change does not configure branch protection or enforce Marcel's approval server-side. It never enables auto-merge.
 
+## Staging delivery
+
+After an approved pull request is merged, the Android staging workflow builds the debug app, runs unit tests and lint, and installs the exact generated APKs on a clean emulator for smoke testing. Successful runs retain the staging APKs and reports as GitHub Actions artifacts for 14 days. The same workflow can be started manually by an authorized maintainer.
+
+This staging step uses read-only repository permissions, debug signing and a reserved non-production backend hostname. It does not upload to MarsTV hosting, contact the production API during automated tests, update the backend, sign a production release or merge changes automatically. Marcel still decides whether a tested staging build advances toward production.
+
 ## Later release stages
 
-Merge, staging deployment, staging smoke tests and production release are not enabled here. They need explicit follow-up authorization, a defined staging target, release credentials held outside the development agent, and approval gates. This first loop ends at the reviewed PR.
+Production signing, hosting deployment and release publishing are not enabled. They require separate authorization, credentials held outside the development agent and an explicit approval gate.

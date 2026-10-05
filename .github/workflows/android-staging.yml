@@ -1,0 +1,90 @@
+name: Android staging delivery
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/android-staging.yml
+      - docs/features/staging-cd.md
+      - scripts/run-staging-smoke.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Isolate the staging build from production services
+        run: echo 'MARSTV_BACKEND_URL=https://staging.invalid/api/v1/' > providers.properties
+      - name: Build staging APKs, test and lint
+        run: bash ./gradlew --no-daemon --continue :app:assembleDebug :app:testDebugUnitTest :app:lintDebug :app:assembleDebugAndroidTest
+      - name: Save staging APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: marstv-staging-apks-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marstv-staging-reports-${{ github.run_number }}
+          path: app/build/reports/
+          retention-days: 14
+
+  emulator-smoke-test:
+    needs: build-test-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: marstv-staging-apks-${{ github.run_number }}
+          path: staging-apks
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          disable-animations: true
+          script: bash scripts/run-staging-smoke.sh
+      - name: Save emulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: marstv-staging-emulator-results-${{ github.run_number }}
+          path: |
+            artifacts/
+            **/build/reports/androidTests/
+          if-no-files-found: ignore
+          retention-days: 14
