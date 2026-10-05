@@ -59,7 +59,18 @@ class SecureStateStore(private val context: Context) {
         current.copy(
             accounts = remaining,
             activeAccountId = if (current.activeAccountId == accountId) remaining.firstOrNull()?.id else current.activeAccountId,
+            catalogRefreshAttemptedAtByAccount = current.catalogRefreshAttemptedAtByAccount - accountId,
         )
+    }
+
+    suspend fun recordCatalogRefreshAttempt(accountId: String, attemptedAt: Long) = mutate { current ->
+        current.copy(
+            catalogRefreshAttemptedAtByAccount = current.catalogRefreshAttemptedAtByAccount + (accountId to attemptedAt),
+        )
+    }
+
+    suspend fun clearCatalogRefreshAttempt(accountId: String) = mutate { current ->
+        current.copy(catalogRefreshAttemptedAtByAccount = current.catalogRefreshAttemptedAtByAccount - accountId)
     }
 
     suspend fun setActiveAccount(accountId: String) = mutate { current ->

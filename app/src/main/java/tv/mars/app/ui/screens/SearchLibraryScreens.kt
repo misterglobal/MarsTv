@@ -1,6 +1,8 @@
 package tv.mars.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
@@ -30,12 +34,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +56,7 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import tv.mars.app.core.CatalogLookup
 import tv.mars.app.core.Channel
+import tv.mars.app.core.ContentKind
 import tv.mars.app.core.MediaContent
 import tv.mars.app.core.WatchRecord
 import tv.mars.app.ui.components.EmptyState
@@ -188,7 +196,8 @@ fun LibraryScreen(
     onClearHistory: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable(accountId) { mutableIntStateOf(0) }
+    var contentFilter by rememberSaveable(accountId) { mutableIntStateOf(0) }
     val favourites by produceState<CatalogLookup?>(null, accountId, catalogRevision, favouriteKeys, blockedCategoryKeys) {
         value = if (accountId.isBlank()) CatalogLookup() else {
             favouritesSource(favouriteKeys, blockedCategoryKeys)
@@ -199,67 +208,89 @@ fun LibraryScreen(
             favouritesSource(lockedFavouriteKeys, blockedCategoryKeys)
         }
     }
-    val tabs = listOf("Favourites", "Continue", "History")
+    val tabs = listOf("Favourites", "Continue watching", "History")
 
-    Column(modifier = modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column {
-                Text("My TV", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-                Text("Favourites and viewing activity stay on this device", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
+    Surface(modifier = modifier.fillMaxSize(), color = Color.Transparent, contentColor = MarsWhite) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("My TV", color = MarsWhite, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                    Text("Favourites and viewing activity stay on this device", color = MarsMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                if (tab == 2 && history.isNotEmpty()) {
+                    FocusSurface(onClick = onClearHistory) {
+                        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DeleteSweep, null, tint = MarsMuted)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Clear history", color = MarsMuted)
+                        }
+                    }
+                }
             }
-            if (tab == 2 && history.isNotEmpty()) {
-                FocusSurface(onClick = onClearHistory) {
-                    Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.DeleteSweep, null, tint = MarsMuted)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Clear history", color = MarsMuted)
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                tabs.forEachIndexed { index, label ->
+                    FocusSurface(onClick = { tab = index }, selected = tab == index) {
+                        Text(label, modifier = Modifier.padding(horizontal = 15.dp, vertical = 10.dp), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("All", "Channels", "Movies", "Series").forEachIndexed { index, label ->
+                    FocusSurface(onClick = { contentFilter = index }, selected = contentFilter == index) {
+                        Text(label, Modifier.padding(horizontal = 15.dp, vertical = 10.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                key(tab, contentFilter) {
+                    when (tab) {
+                        0 -> if (favourites == null) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                        } else {
+                            FavouriteLibrary(
+                                channels = favourites.orEmpty().channels.filter { matchesLibraryFilter(ContentKind.LIVE, contentFilter) },
+                                media = favourites.orEmpty().media.filter { matchesLibraryFilter(it.kind, contentFilter) },
+                                onPlayChannel = onPlayChannel,
+                                onOpenMedia = onOpenMedia,
+                                onToggleFavourite = onToggleFavourite,
+                                lockedFavourites = CatalogLookup(
+                                    channels = lockedFavourites.orEmpty().channels.filter { matchesLibraryFilter(ContentKind.LIVE, contentFilter) },
+                                    media = lockedFavourites.orEmpty().media.filter { matchesLibraryFilter(it.kind, contentFilter) },
+                                ),
+                            )
+                        }
+                        1 -> HistoryList(
+                            records = continueWatching.filter { matchesLibraryFilter(it.kind, contentFilter) },
+                            emptyTitle = "Nothing to continue in this view",
+                            emptyDetail = "Partially watched movies and episodes will appear here. Try All to see other types.",
+                            onPlay = onPlayHistory,
+                        )
+                        else -> HistoryList(
+                            records = history.filter { matchesLibraryFilter(it.kind, contentFilter) },
+                            emptyTitle = "No viewing history in this view",
+                            emptyDetail = "Recently played content will appear here. Try All to see other types.",
+                            onPlay = onPlayHistory,
+                        )
                     }
                 }
             }
         }
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            tabs.forEachIndexed { index, label ->
-                FocusSurface(onClick = { tab = index }, selected = tab == index) {
-                    Text(label, modifier = Modifier.padding(horizontal = 15.dp, vertical = 10.dp), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-
-        when (tab) {
-            0 -> if (favourites == null) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-            } else {
-                FavouriteLibrary(
-                    channels = favourites.orEmpty().channels,
-                    media = favourites.orEmpty().media,
-                    favouriteKeys = favouriteKeys,
-                    isTelevision = isTelevision,
-                    onPlayChannel = onPlayChannel,
-                    onOpenMedia = onOpenMedia,
-                    onToggleFavourite = onToggleFavourite,
-                    lockedFavourites = lockedFavourites.orEmpty(),
-                )
-            }
-            1 -> HistoryList(
-                records = continueWatching,
-                emptyTitle = "Nothing to continue",
-                emptyDetail = "Partially watched movies and episodes will appear here.",
-                onPlay = onPlayHistory,
-            )
-            else -> HistoryList(
-                records = history,
-                emptyTitle = "No viewing history",
-                emptyDetail = "Recently played content will appear here.",
-                onPlay = onPlayHistory,
-            )
-        }
     }
+}
+
+internal fun matchesLibraryFilter(kind: ContentKind, filter: Int): Boolean = when (filter) {
+    1 -> kind == ContentKind.LIVE
+    2 -> kind == ContentKind.MOVIE
+    3 -> kind == ContentKind.SERIES || kind == ContentKind.EPISODE
+    else -> true
 }
 
 private fun CatalogLookup?.orEmpty(): CatalogLookup = this ?: CatalogLookup()
@@ -268,41 +299,30 @@ private fun CatalogLookup?.orEmpty(): CatalogLookup = this ?: CatalogLookup()
 private fun FavouriteLibrary(
     channels: List<Channel>,
     media: List<MediaContent>,
-    favouriteKeys: Set<String>,
-    isTelevision: Boolean,
     onPlayChannel: (Channel) -> Unit,
     onOpenMedia: (MediaContent) -> Unit,
     onToggleFavourite: (String) -> Unit,
     lockedFavourites: CatalogLookup,
 ) {
     if (channels.isEmpty() && media.isEmpty() && lockedFavourites.channels.isEmpty() && lockedFavourites.media.isEmpty()) {
-        EmptyState("No favourites yet", "Use the heart button on a channel, movie, or series.")
+        EmptyState("No favourites in this view", "Try All, or use the heart button on a channel, movie, or series.")
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (channels.isNotEmpty()) {
-            item { Text("Channels", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-            item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(channels, key = Channel::key) { channel ->
-                        SearchChannelCard(channel, true) { onPlayChannel(channel) }
-                    }
-                }
+            item { Text("Channels", color = MarsWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+            items(channels, key = Channel::key) { channel ->
+                LibraryFavouriteRow(channel.name, channel.categoryName, channel.logoUrl,
+                    onOpen = { onPlayChannel(channel) }, onRemove = { onToggleFavourite(channel.key) })
             }
         }
-        if (media.isNotEmpty()) {
-            item { Text("Movies and series", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-            item {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    items(media, key = MediaContent::key) { item ->
-                        PosterCard(
-                            item = item,
-                            favourite = item.key in favouriteKeys,
-                            isTelevision = isTelevision,
-                            onClick = { onOpenMedia(item) },
-                            onFavourite = { onToggleFavourite(item.key) },
-                        )
-                    }
+        listOf(ContentKind.MOVIE to "Movies", ContentKind.SERIES to "Series").forEach { (kind, label) ->
+            val entries = media.filter { it.kind == kind || (kind == ContentKind.SERIES && it.kind == ContentKind.EPISODE) }
+            if (entries.isNotEmpty()) {
+                item { Text(label, color = MarsWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
+                items(entries, key = MediaContent::key) { entry ->
+                    LibraryFavouriteRow(entry.title, entry.categoryName, entry.artworkUrl,
+                        onOpen = { onOpenMedia(entry) }, onRemove = { onToggleFavourite(entry.key) })
                 }
             }
         }
@@ -311,7 +331,7 @@ private fun FavouriteLibrary(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Lock, null, tint = MarsViolet)
                     Spacer(Modifier.width(8.dp))
-                    Text("Additional favourites — MarsTV Pro", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text("Additional favourites — MarsTV Pro", color = MarsWhite, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
             }
             items(lockedFavourites.channels, key = { "locked:${it.key}" }) { channel ->
@@ -322,6 +342,31 @@ private fun FavouriteLibrary(
             }
         }
         item { Spacer(Modifier.height(28.dp)) }
+    }
+}
+
+@Composable
+private fun LibraryFavouriteRow(title: String, category: String, artwork: String, onOpen: () -> Unit, onRemove: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        FocusSurface(onClick = onOpen, modifier = Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(MarsSurfaceRaised), contentAlignment = Alignment.Center) {
+                    if (artwork.isNotBlank()) {
+                        AsyncImage(model = artwork, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    } else {
+                        Icon(Icons.Default.PlayArrow, null, tint = MarsRed)
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(category, color = MarsMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        FocusSurface(onClick = onRemove) {
+            Icon(Icons.Default.Favorite, contentDescription = "Remove favourite: $title", tint = MarsRed, modifier = Modifier.padding(14.dp))
+        }
     }
 }
 
@@ -350,8 +395,8 @@ private fun HistoryList(
     }
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(records, key = { "${it.contentKey}:${it.watchedAt}" }) { record ->
-            FocusSurface(onClick = { onPlay(record) }, modifier = Modifier.fillMaxWidth().height(86.dp)) {
-                Row(modifier = Modifier.fillMaxSize().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            FocusSurface(onClick = { onPlay(record) }, modifier = Modifier.fillMaxWidth().heightIn(min = 86.dp)) {
+                Row(modifier = Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier.width(112.dp).height(66.dp).clip(RoundedCornerShape(8.dp)).background(MarsSurfaceRaised),
                         contentAlignment = Alignment.Center,
@@ -369,7 +414,7 @@ private fun HistoryList(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(record.title, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(record.title, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         Text(
                             DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(record.watchedAt)),
                             color = MarsMuted,

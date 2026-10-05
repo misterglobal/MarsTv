@@ -1,0 +1,23 @@
+name: MarsTV feature
+description: Request a feature for the local Codex development loop.
+title: '[Feature] '
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired behavior
+      description: What should change for the user?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will Marcel verify the result? Include TV/mobile and Free/Pro expectations.
+    validations:
+      required: true
+  - type: textarea
+    id: exclusions
+    attributes:
+      label: Out of scope
+      value: No production keys, billing/licensing changes, backend deployment, database changes, merge or release.
