@@ -26,4 +26,6 @@ This staging step uses read-only repository permissions, debug signing and a res
 
 ## Later release stages
 
-Production signing, hosting deployment and release publishing are not enabled. They require separate authorization, credentials held outside the development agent and an explicit approval gate.
+Production signing and release publication are available only through the manually dispatched Android production release workflow. Signing and SSH publication use separate protected GitHub environments and approvals; no push, merge or development automation can start a production release. Production credentials stay in protected environment secrets and are not available to pull-request checks.
+
+The workflow prepares a signed candidate first, then pauses for a second approval before atomically publishing through the allowlisted cPanel paths. Marcel must still complete staging and device acceptance checks, explicitly start the production workflow, approve both environments and verify the resulting update. Backend source deployment, database changes and billing/licensing changes remain outside this pipeline.
