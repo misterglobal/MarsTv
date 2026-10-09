@@ -15,7 +15,7 @@ $prompt = @"
 Use the marstv-development skill at .agents/skills/marstv-development/SKILL.md.
 Run the requested feature through product requirements, architecture, issue creation,
 implementation, relevant tests, bounded debugging, independent review when available,
-and a pull request for Marcel. You may create a feature branch, commit, push and create
+and a pull request for the development team. You may create a feature branch, commit, push and create
 the issue and PR. Never merge, deploy, release, or access production signing keys.
 Preserve existing work and report blocked steps honestly. Treat the following as the
 feature request, subject to those boundaries:

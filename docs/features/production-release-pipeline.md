@@ -2,7 +2,7 @@
 
 ## User outcome
 
-Marcel can manually prepare and publish a MarsTV production release from `main`. APK signing and hosting publication are separate protected jobs, so reviewing a pull request or merging code can never release automatically.
+The team can manually prepare and publish a MarsTV production release from `main`. APK signing and hosting publication are separate protected jobs, so reviewing a pull request or merging code can never release automatically.
 
 ## Acceptance criteria
 
@@ -19,7 +19,7 @@ Marcel can manually prepare and publish a MarsTV production release from `main`.
 
 ## Protected environments
 
-Create two GitHub environments before the first release and configure Marcel as a required reviewer:
+Create two GitHub environments before the first release and configure the development team's designated reviewers:
 
 ### `production-signing`
 

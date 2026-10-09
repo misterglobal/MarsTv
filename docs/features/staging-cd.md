@@ -2,7 +2,7 @@
 
 ## User outcome
 
-Every approved change merged to `main` produces a tested MarsTV staging APK that Marcel can download from the matching GitHub Actions run. This provides a repeatable handoff for testing without deploying to hosting or using production signing material.
+Every approved change merged to `main` produces a tested MarsTV staging APK that the team can download from the matching GitHub Actions run. This provides a repeatable handoff for testing without deploying to hosting or using production signing material.
 
 ## Acceptance criteria
 
@@ -33,4 +33,4 @@ Every approved change merged to `main` produces a tested MarsTV staging APK that
 - Run the existing debug build, unit tests, lint and instrumentation APK build locally.
 - Validate the workflow YAML and review its permissions, triggers and artifact paths.
 - Let the pull request workflow exercise the staging build and clean-emulator smoke test.
-- After Marcel approves and merges the pull request, confirm the first `main` workflow run produces downloadable staging APKs.
+- After the team approves and merges the pull request, confirm the first `main` workflow run produces downloadable staging APKs.
